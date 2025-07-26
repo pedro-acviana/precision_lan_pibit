@@ -1,0 +1,35 @@
+digraph pastafarianism {
+ordering=out;
+graph [fontname="times-roman"];
+node [fontname="times-roman"];
+edge [fontname="times-roman"];
+"Missao Precision Landing" [fillcolor=orange, fontcolor=black, fontsize=9, label="Ⓜ Missao Precision Landing", shape=box, style=filled];
+"iniciar voo" [fillcolor=orange, fontcolor=black, fontsize=9, label="Ⓜ iniciar voo", shape=box, style=filled];
+"Missao Precision Landing" -> "iniciar voo";
+Condicoes_seguras [fillcolor=gray, fontcolor=black, fontsize=9, label=Condicoes_seguras, shape=ellipse, style=filled];
+"iniciar voo" -> Condicoes_seguras;
+Armagem [fillcolor=orange, fontcolor=black, fontsize=9, label="Ⓜ Armagem", shape=box, style=filled];
+"iniciar voo" -> Armagem;
+Arm [fillcolor=gray, fontcolor=black, fontsize=9, label=Arm, shape=ellipse, style=filled];
+Armagem -> Arm;
+OffboardMode [fillcolor=gray, fontcolor=black, fontsize=9, label=OffboardMode, shape=ellipse, style=filled];
+Armagem -> OffboardMode;
+TakeoffSetpoint [fillcolor=gray, fontcolor=black, fontsize=9, label=TakeoffSetpoint, shape=ellipse, style=filled];
+Armagem -> TakeoffSetpoint;
+"Busca Local Seguro" [fillcolor=orange, fontcolor=black, fontsize=9, label="Ⓜ Busca Local Seguro", shape=box, style=filled];
+"Missao Precision Landing" -> "Busca Local Seguro";
+"Achar Local Seguro" [fillcolor=gray, fontcolor=black, fontsize=9, label="Achar Local Seguro", shape=ellipse, style=filled];
+"Busca Local Seguro" -> "Achar Local Seguro";
+"Converter Imagem->NED" [fillcolor=gray, fontcolor=black, fontsize=9, label="Converter Imagem->NED", shape=ellipse, style=filled];
+"Busca Local Seguro" -> "Converter Imagem->NED";
+"Aproximar Local Seguro" [fillcolor=gray, fontcolor=black, fontsize=9, label="Aproximar Local Seguro", shape=ellipse, style=filled];
+"Busca Local Seguro" -> "Aproximar Local Seguro";
+"Pouso Final" [fillcolor=orange, fontcolor=black, fontsize=9, label="Ⓜ Pouso Final", shape=box, style=filled];
+"Missao Precision Landing" -> "Pouso Final";
+"Iniciar Pouso" [fillcolor=gray, fontcolor=black, fontsize=9, label="Iniciar Pouso", shape=ellipse, style=filled];
+"Pouso Final" -> "Iniciar Pouso";
+"Está no Chão?" [fillcolor=gray, fontcolor=black, fontsize=9, label="Está no Chão?", shape=ellipse, style=filled];
+"Pouso Final" -> "Está no Chão?";
+Desarmar [fillcolor=gray, fontcolor=black, fontsize=9, label=Desarmar, shape=ellipse, style=filled];
+"Pouso Final" -> Desarmar;
+}

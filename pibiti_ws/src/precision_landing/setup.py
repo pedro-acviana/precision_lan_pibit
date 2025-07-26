@@ -15,11 +15,13 @@ setup(
     zip_safe=True,
     maintainer='pedrobook',
     maintainer_email='pedroacviana@outlook.com',
-    description='TODO: Package description',
+    description='Precision landing package for drones using computer vision',
     license='Apache-2.0',
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
+            'main = precision_landing.main:main',
+            'takeoff_tree = precision_landing.takeoff_tree:main'
         ],
     },
 )

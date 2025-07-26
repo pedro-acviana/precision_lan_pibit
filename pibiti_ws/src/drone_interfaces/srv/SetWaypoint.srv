@@ -1,0 +1,8 @@
+# Service to set a waypoint for the drone to navigate to
+float32 x                  # X position in meters
+float32 y                  # Y position in meters
+float32 z                  # Z position in meters
+float32 yaw                # Yaw angle in radians
+---
+bool success               # Whether the waypoint was set successfully
+string message             # Status message
