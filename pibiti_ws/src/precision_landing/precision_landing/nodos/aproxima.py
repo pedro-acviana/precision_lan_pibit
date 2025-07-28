@@ -7,7 +7,7 @@ class aproxima(py_trees.behaviour.Behaviour):
     def __init__(self, name, commander):
         super().__init__(name)
         self.commander = commander
-        self.tolerance = 0.5  # Tolerância em metros para considerar que chegou ao alvo
+        self.tolerance = 0.1  # Tolerância em metros para considerar que chegou ao alvo
         self.max_velocity = 2.0  # Velocidade máxima em m/s
         self.target_reached = False
         
@@ -34,14 +34,7 @@ class aproxima(py_trees.behaviour.Behaviour):
             target_x = target_ned['x']
             target_y = target_ned['y']
             
-            # Obtém posição atual do drone usando curr_position do commander
-            if not hasattr(self.commander, 'curr_position') or self.commander.curr_position is None:
-                self.logger.warn("Posição atual do drone não disponível")
-                return py_trees.common.Status.RUNNING
-            
-            current_pos = self.commander.curr_position
-            
-            # Calcula a distância até o alvo
+            # Calcula a distância até o alvo (target_ned já são distâncias relativas)
             distance_x = target_x  # Distância relativa em X (Norte)
             distance_y = target_y  # Distância relativa em Y (Leste)
             total_distance = math.sqrt(distance_x**2 + distance_y**2)

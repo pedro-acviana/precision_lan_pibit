@@ -62,7 +62,8 @@ class PX4Commander(Node):
         self.current_position = [0.0, 0.0, 0.0]
         self.center_data = None
 
-        self.target_altitude = 4.0
+        self.target_altitude = 1.0
+        self.initial_yaw = None  # Armazena o yaw inicial do drone
         self.clock = self.get_clock()
 
         self.offboard_setpoint_counter = 0
@@ -99,7 +100,13 @@ class PX4Commander(Node):
     def local_position_callback(self, msg):
         self.local_velocity = [msg.vx, msg.vy, msg.vz]
         self.curr_position = [msg.x, msg.y, msg.z]
-        self.current_position = msg.data[:3]
+        
+        # Captura o yaw inicial do drone na primeira leitura
+        if self.initial_yaw is None:
+            self.initial_yaw = msg.yaw
+            self.get_logger().info(f"Yaw inicial capturado: {self.initial_yaw:.2f} rad")
+        
+        # self.current_position = msg.data[:3]  # Removido - causa erro
 
     def center_data_callback(self, msg):
         self.center_data = msg.data
@@ -262,6 +269,8 @@ class PX4Commander(Node):
         msg = TrajectorySetpoint()
         msg.velocity = [float(vx), float(vy), float(vz)]
         msg.position = [float('nan')] * 3
+        # Usa o yaw inicial para evitar rotação indesejada
+        msg.yaw = self.initial_yaw if self.initial_yaw is not None else float('nan')
         msg.timestamp = int(self.get_clock().now().nanoseconds / 1000)
         self.setpoint_pub.publish(msg)
     
