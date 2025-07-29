@@ -11,7 +11,7 @@ class Takeoff(py_trees.behaviour.Behaviour):
         self.cmdr = commander
         self.alt = altitude
         self.start_time = 0.0  # Inicializa com valor padrão
-        self.altitude_tolerance = 0.1  # Tolerância de 0.3 metros
+        self.altitude_tolerance = 0.2  # Tolerância de 0.1 metros
         self.current_altitude = None  # Altitude obtida via subscriber
         
     def setup(self, **kwargs):
@@ -43,7 +43,7 @@ class Takeoff(py_trees.behaviour.Behaviour):
 
     def update(self):
         # Timeout de segurança (30 segundos máximo)
-        if time.time() - self.start_time > 30.0:
+        if time.time() - self.start_time > 50.0:
             self.cmdr.get_logger().warn("Timeout no takeoff - forçando sucesso")
             return py_trees.common.Status.FAILURE
         

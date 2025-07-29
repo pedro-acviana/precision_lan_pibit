@@ -18,7 +18,7 @@ class achar_local_seguro(py_trees.behaviour.Behaviour):
         self.commander = commander
         self.cam = None
         self.camera_topic = "/camera"
-        self.camera_resolution = (1280, 960)
+        self.camera_resolution = (640, 480)  # Mesma resolução do img2local
         self.camera_pronta = False
         self.running = False
         self.thread = None
@@ -119,16 +119,19 @@ class achar_local_seguro(py_trees.behaviour.Behaviour):
     def analisar_local_seguro(self, image):
         """
         Analisa a imagem para encontrar um local seguro para pouso usando detecção de features
-        Considera apenas pontos com Y >= 480 (metade inferior da imagem onde o chão deve estar)
+        Considera apenas pontos com Y >= metade da altura (metade inferior da imagem onde o chão deve estar)
         Retorna (best_position, best_score) se encontrou um local adequado, (None, None) caso contrário
         """
         try:
             # Converte para escala de cinza
             gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if len(image.shape) == 3 else image
             
-            # Dimensões da imagem completa
+            # Dimensões da imagem atual (pode variar da configuração inicial)
             h, w = gray.shape
+            meio_altura = h // 2  # Calcula dinamicamente a metade da altura
             block_size = 100  # Tamanho do bloco em pixels
+            
+            self.logger.info(f"Analisando imagem: {w}x{h}, meio_altura: {meio_altura}")
             
             best_score = float('inf')  # Menor número de features = melhor
             best_position = None
@@ -136,19 +139,38 @@ class achar_local_seguro(py_trees.behaviour.Behaviour):
             # Inicializa detector de features
             fast = cv2.FastFeatureDetector_create(threshold=30)
             
-            # Percorre toda a imagem, mas só considera blocos com centro Y >= 480
-            for y in range(0, h - block_size, block_size // 2):
-                for x in range(0, w - block_size, block_size // 2):
+            # Percorre apenas a metade inferior da imagem com bounds corretos
+            y_start = meio_altura  # Começa na metade da imagem
+            y_end = h - block_size  # Para quando não há mais espaço para um bloco completo
+            x_end = w - block_size  # Para quando não há mais espaço para um bloco completo
+            
+            if y_end <= y_start or x_end <= 0:
+                self.logger.warning(f"Imagem muito pequena para análise: {w}x{h}")
+                return None, None
+            
+            blocks_analyzed = 0
+            
+            # Percorre a metade inferior da imagem
+            for y in range(y_start, y_end, block_size // 2):
+                for x in range(0, x_end, block_size // 2):
                     # Calcula o centro do bloco
                     center_y = y + block_size // 2
                     center_x = x + block_size // 2
                     
-                    # Só considera blocos na metade inferior (Y >= 480)
-                    if center_y < 480:
+                    # Verifica se o centro está dentro dos limites da imagem
+                    if center_x >= w or center_y >= h:
                         continue
                     
-                    # Extrai o bloco da imagem
-                    block = gray[y:y + block_size, x:x + block_size]
+                    # Extrai o bloco da imagem com verificação de bounds
+                    block_y_end = min(y + block_size, h)
+                    block_x_end = min(x + block_size, w)
+                    block = gray[y:block_y_end, x:block_x_end]
+                    
+                    # Pula blocos muito pequenos
+                    if block.shape[0] < block_size//2 or block.shape[1] < block_size//2:
+                        continue
+                    
+                    blocks_analyzed += 1
                     
                     # Detecta features no bloco
                     keypoints = fast.detect(block, None)
@@ -165,7 +187,16 @@ class achar_local_seguro(py_trees.behaviour.Behaviour):
                         # Posição já está nas coordenadas da imagem completa
                         best_position = (center_x, center_y)
             
+            self.logger.info(f"Blocos analisados: {blocks_analyzed}")
+            
             if best_position is not None:
+                # Validação final das coordenadas
+                if best_position[0] >= w or best_position[1] >= h:
+                    self.logger.error(f"Coordenadas inválidas detectadas: {best_position} em imagem {w}x{h}")
+                    return None, None
+                
+                self.logger.info(f"Melhor posição encontrada: {best_position} (score: {best_score:.2f})")
+                
                 # Durante a estabilização, atualiza o melhor local se encontrar um melhor
                 if self.stabilization_phase:
                     if best_score < self.best_landing_score:
@@ -186,6 +217,7 @@ class achar_local_seguro(py_trees.behaviour.Behaviour):
                 
                 return best_position, best_score
             else:
+                self.logger.warning("Nenhum local seguro encontrado")
                 return None, None
                 
         except Exception as e:

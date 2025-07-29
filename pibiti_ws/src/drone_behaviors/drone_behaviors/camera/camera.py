@@ -47,7 +47,8 @@ class GzCam:
 
 if __name__ == "__main__":
     # Ajuste aqui a resolução para a largura que espera (exemplo: 1280)
-    cam = GzCam("/camera", (1280, 960))
+    # cam = GzCam("/camera", (1280, 960))
+    cam = GzCam("/camera", (640, 480))
     while True:
         img = cam.get_next_image()
         if img is not None:

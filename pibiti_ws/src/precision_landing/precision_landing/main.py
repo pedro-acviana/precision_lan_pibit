@@ -27,36 +27,37 @@ def build_behavior_tree(commander):
     # 3. Converter posição da imagem para coordenadas NED
     converter_coord = img2local("Converter Imagem->NED")
     
-    # 4. Aproximar do local usando comandos de velocidade
+    # 4. Aproximar do local e realizar pouso automaticamente
     aproximar = aproxima("Aproximar Local Seguro", commander)
-    # Configurar o aproxima com as subscrições necessárias
-    aproximar.setup()
     
-    # 5. Sequência de pouso - remover pois agora o aproxima faz o pouso
-    # landing_seq = BehaviorFactory.create_landing_sequence(commander)
+    # Nota: O nodo 'aproxima' agora gerencia tanto a aproximação quanto o pouso
+    # Não é mais necessário um nodo separado para landing
 
     # Adiciona todos os nodos na sequência principal (execução sequencial)
     root.add_children([
         takeoff_seq,        # 1º: Takeoff (deve completar antes de prosseguir)
         buscar_local,       # 2º: Buscar local seguro (5s de estabilização)
-        converter_coord,    # 3º: Converter pixel para NED
-        aproximar          # 4º: Aproximar do local e pousar
+        converter_coord,    # 3º: Converter pixel para coordenadas NED
+        aproximar          # 4º: Aproximar do local e realizar pouso completo
     ])
     
     tree = py_trees.trees.BehaviourTree(root)
     tree.setup(timeout=15)
     
-    # Configurar manualmente o img2local com o node
-    # Buscar o nó img2local na árvore e configurá-lo
-    def find_and_setup_img2local(node):
+    # Configurar manualmente os nodos que precisam de setup específico
+    def configure_custom_nodes(node):
+        """Configura nodos que precisam de setup personalizado"""
         if isinstance(node, img2local):
             node.setup(node=commander)
+        elif isinstance(node, aproxima):
+            node.setup()
+        
         # Recursivamente buscar em nós compostos
         if hasattr(node, 'children'):
             for child in node.children:
-                find_and_setup_img2local(child)
+                configure_custom_nodes(child)
     
-    find_and_setup_img2local(root)
+    configure_custom_nodes(root)
     
     return tree
 
