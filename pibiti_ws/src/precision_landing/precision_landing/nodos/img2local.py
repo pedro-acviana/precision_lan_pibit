@@ -136,17 +136,18 @@ class img2local(py_trees.behaviour.Behaviour):
                 
                 self.logger.info(f"Usando FOV linear - Ângulos calculados: X={math.degrees(angle_x):.2f}°, Y={math.degrees(angle_y):.2f}°")
             
-            # Converte ângulos para distâncias no solo usando trigonometria
-            # Câmera aponta para a frente - usa altitude para calcular distância no solo
-            # Para câmera frontal: Y da imagem corresponde à distância à frente (X em NED)
-            # X da imagem corresponde ao lado esquerdo/direito (Y em NED)
-            
-            # Distância à frente (North em NED) - baseada no ângulo vertical da câmera
-            distance_north = altitude * math.tan(angle_y)  # Positivo = à frente
-            
-            # Distância lateral (East em NED) - baseada no ângulo horizontal da câmera  
-        
-            distance_east = -altitude * math.tan(angle_x)   # Negativo = à esquerda (oeste), Positivo = à direita (leste)
+            # NOVA FUNCIONALIDADE: Verifica se há calibração dinâmica disponível
+            if blackboard.exists("calibration_available") and blackboard.get("calibration_available"):
+                # Usa calibração dinâmica (método mais preciso)
+                distance_north, distance_east = self.convert_with_calibration(
+                    offset_x_pixels, offset_y_pixels, altitude, blackboard
+                )
+                self.logger.info("Usando conversão com calibração dinâmica")
+            else:
+                # Fallback: conversão trigonométrica tradicional
+                distance_north = altitude * math.tan(angle_y)  # Positivo = à frente
+                distance_east = -altitude * math.tan(angle_x)   # Negativo = à esquerda (oeste), Positivo = à direita (leste)
+                self.logger.info("Usando conversão trigonométrica (sem calibração)")
             
             # Em NED: North (X), East (Y), Down (Z)
             ned_target = {
@@ -172,3 +173,67 @@ class img2local(py_trees.behaviour.Behaviour):
             self.logger.info("Conversão pixel->NED concluída com sucesso")
         else:
             self.logger.info("Conversão pixel->NED finalizada")
+    
+    def convert_with_calibration(self, offset_x_pixels, offset_y_pixels, altitude, blackboard):
+        """
+        Converte offset de pixels para coordenadas NED usando calibração dinâmica
+        """
+        try:
+            # Obtém dados de calibração
+            calibration_matrix = blackboard.get("calibration_matrix")
+            calibration_altitude = blackboard.get("calibration_altitude")
+            
+            if calibration_matrix is None or calibration_altitude is None:
+                self.logger.warning("Dados de calibração incompletos, usando método trigonométrico")
+                # Fallback para método trigonométrico
+                angle_x = math.atan(offset_x_pixels / self.focal_length_x_pixels) if self.use_focal_length else (offset_x_pixels / self.image_width) * self.camera_fov_horizontal
+                angle_y = math.atan(offset_y_pixels / self.focal_length_y_pixels) if self.use_focal_length else (offset_y_pixels / self.image_height) * self.camera_fov_vertical
+                
+                distance_north = altitude * math.tan(angle_y)
+                distance_east = -altitude * math.tan(angle_x)
+                return distance_north, distance_east
+            
+            # Converte matriz para numpy se necessário
+            if not isinstance(calibration_matrix, np.ndarray):
+                calibration_matrix = np.array(calibration_matrix)
+            
+            # Inverte a matriz de conversão: [Δpx, Δpy] = M × [ΔN, ΔE]
+            # Queremos: [ΔN, ΔE] = M⁻¹ × [Δpx, Δpy]
+            try:
+                inv_matrix = np.linalg.inv(calibration_matrix)
+            except np.linalg.LinAlgError:
+                self.logger.error("Matriz de calibração não é inversível")
+                # Fallback para método trigonométrico
+                angle_x = math.atan(offset_x_pixels / self.focal_length_x_pixels) if self.use_focal_length else (offset_x_pixels / self.image_width) * self.camera_fov_horizontal
+                angle_y = math.atan(offset_y_pixels / self.focal_length_y_pixels) if self.use_focal_length else (offset_y_pixels / self.image_height) * self.camera_fov_vertical
+                
+                distance_north = altitude * math.tan(angle_y)
+                distance_east = -altitude * math.tan(angle_x)
+                return distance_north, distance_east
+            
+            # Converte offset de pixels para mudança NED por pixel
+            pixel_delta = np.array([offset_x_pixels, offset_y_pixels])
+            ned_delta_per_pixel = inv_matrix @ pixel_delta
+            
+            # Aplica correção de altitude (escala com a altura)
+            # A calibração foi feita em uma altitude específica
+            altitude_scale = altitude / calibration_altitude
+            
+            # Calcula distâncias finais NED
+            distance_north = ned_delta_per_pixel[0] * altitude_scale
+            distance_east = ned_delta_per_pixel[1] * altitude_scale
+            
+            self.logger.info(f"Calibração aplicada - Escala altitude: {altitude_scale:.2f}")
+            self.logger.info(f"Delta NED bruto: N={ned_delta_per_pixel[0]:.3f}, E={ned_delta_per_pixel[1]:.3f}")
+            
+            return distance_north, distance_east
+            
+        except Exception as e:
+            self.logger.error(f"Erro na conversão com calibração: {e}")
+            # Fallback para método trigonométrico
+            angle_x = math.atan(offset_x_pixels / self.focal_length_x_pixels) if self.use_focal_length else (offset_x_pixels / self.image_width) * self.camera_fov_horizontal
+            angle_y = math.atan(offset_y_pixels / self.focal_length_y_pixels) if self.use_focal_length else (offset_y_pixels / self.image_height) * self.camera_fov_vertical
+            
+            distance_north = altitude * math.tan(angle_y)
+            distance_east = -altitude * math.tan(angle_x)
+            return distance_north, distance_east

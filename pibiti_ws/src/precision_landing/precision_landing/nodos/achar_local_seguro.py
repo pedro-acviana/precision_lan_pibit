@@ -16,12 +16,6 @@ class achar_local_seguro(py_trees.behaviour.Behaviour):
     def __init__(self, name, commander):
         super().__init__(name)
         self.commander = commander
-        self.cam = None
-        self.camera_topic = "/camera"
-        self.camera_resolution = (1280, 960)
-        self.camera_pronta = False
-        self.running = False
-        self.thread = None
         self.node = None
         self.local_seguro_encontrado = False
         
@@ -32,89 +26,26 @@ class achar_local_seguro(py_trees.behaviour.Behaviour):
         self.best_landing_spot = None
         self.best_landing_score = float('inf')
         
+        # Compatibilidade com outros nodos
+        self.camera_pronta = False
+        
         
     def setup(self, **kwargs):
         """Configuração inicial do nodo"""
         try:
-            # Usar o commander como node (não depende do parâmetro kwargs)
+            # Usar o commander como node
             self.node = self.commander
-                
-            # Inicializar GzCam diretamente
-            if not gzcamera_available:
-                self.logger.error("GzCam não disponível!")
-                return False
-                
-            self.cam = GzCam(self.camera_topic, self.camera_resolution)
-            self.logger.info("GzCam inicializada com sucesso para busca de local seguro")
+            self.camera_pronta = True  # Assume que camera_feed está ativo
             
-            # Iniciar thread de processamento contínuo
-            self.running = True
-            self.thread = threading.Thread(target=self.process_camera, daemon=True)
-            self.thread.start()
-            
+            self.logger.info("Achar local seguro configurado - usando camera_feed")
             return True
             
         except Exception as e:
-            self.logger.error(f"Falha na inicialização da câmera: {str(e)}")
-            self.camera_pronta = False
+            self.logger.error(f"Falha na configuração: {str(e)}")
             return False
         
     def initialise(self):
         self.logger.info("Iniciando busca por local seguro para pouso")
-        
-    def process_camera(self):
-        """Processa continuamente as imagens da câmera em uma thread separada"""
-        while self.running:
-            try:
-                if self.cam is None:
-                    self.logger.warning("Câmera não inicializada, aguardando...")
-                    
-                # Captura nova imagem da câmera Gazebo
-                image = self.cam.get_next_image(timeout=1.0)
-                
-                if image is None:
-                    self.logger.warning("Imagem da câmera não capturada, tentando novamente...")
-                    time.sleep(0.1)
-                    continue
-                
-                # Desenha linha divisória para mostrar área de análise (metade inferior)
-                h, w = image.shape[:2]
-                meio_altura = h // 2
-                cv2.line(image, (0, meio_altura), (w, meio_altura), (255, 255, 0), 2)  # Linha amarela
-                cv2.putText(image, 'Area de Analise', 
-                           (10, meio_altura + 25), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), 2)
-                
-                # Análise para encontrar local seguro
-                best_position, best_score = self.analisar_local_seguro(image)
-                
-                if best_position is not None:
-                    self.local_seguro_encontrado = True
-                    self.camera_pronta = True
-                    
-                    # Marca o melhor local na imagem (centro da área com menos features)
-                    cv2.circle(image, best_position, 25, (0, 255, 0), 3)  # Círculo verde maior
-                    cv2.circle(image, best_position, 8, (0, 255, 0), -1)   # Centro preenchido maior
-                    cv2.putText(image, f'Melhor Local Pouso', 
-                               (best_position[0] + 30, best_position[1]), 
-                               cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
-                    cv2.putText(image, f'Score: {best_score:.1f}', 
-                               (best_position[0] + 30, best_position[1] + 25), 
-                               cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
-                    
-                    # Desenha um retângulo ao redor da área selecionada
-                    block_size = 100
-                    top_left = (best_position[0] - block_size//2, best_position[1] - block_size//2)
-                    bottom_right = (best_position[0] + block_size//2, best_position[1] + block_size//2)
-                    cv2.rectangle(image, top_left, bottom_right, (0, 255, 0), 2)
-                
-                # Exibe a imagem da câmera usando cv2.imshow
-                cv2.imshow("Camera Gazebo - Local Seguro", image)
-                cv2.waitKey(1)  # Necessário para atualizar a janela
-                    
-            except Exception as e:
-                if self.node:
-                    self.node.get_logger().error(f"Erro no processamento da câmera: {e}")
-                time.sleep(1)
     
     def analisar_local_seguro(self, image):
         """
@@ -195,11 +126,18 @@ class achar_local_seguro(py_trees.behaviour.Behaviour):
         
     def update(self):
         """
-        Comportamento contínuo que roda em paralelo com outros nodos
+        Comportamento que analisa imagens do camera_feed para encontrar local seguro
         """
         try:
-            # Verifica se a câmera está pronta e funcionando
-            if not self.camera_pronta:
+            blackboard = py_trees.blackboard.Blackboard()
+            
+            # Verifica se há imagem disponível do camera_feed
+            if not blackboard.exists("current_image"):
+                self.logger.warning("Imagem não disponível do camera_feed")
+                return py_trees.common.Status.RUNNING
+            
+            image = blackboard.get("current_image")
+            if image is None:
                 return py_trees.common.Status.RUNNING
             
             # Fase de estabilização: aguarda 5 segundos após takeoff
@@ -213,13 +151,25 @@ class achar_local_seguro(py_trees.behaviour.Behaviour):
                 
                 if elapsed_time < self.stabilization_duration:
                     # Ainda na fase de estabilização, continua buscando
+                    best_position, best_score = self.analisar_local_seguro(image)
+                    
+                    # Visualiza a imagem com as análises
+                    self.display_analysis_image(image, best_position, best_score)
+                    
+                    if best_position is not None:
+                        # Durante a estabilização, atualiza o melhor local se encontrar um melhor
+                        if best_score < self.best_landing_score:
+                            self.best_landing_spot = best_position
+                            self.best_landing_score = best_score
+                            if self.node:
+                                self.node.get_logger().info(f"Novo melhor local durante estabilização: {best_position}, score: {best_score:.2f}")
+                    
                     return py_trees.common.Status.RUNNING
                 else:
                     # Fase de estabilização concluída
                     self.stabilization_phase = False
                     if self.best_landing_spot is not None:
                         # Salva o melhor local encontrado no blackboard
-                        blackboard = py_trees.blackboard.Blackboard()
                         blackboard.set("local_seguro_pixel", self.best_landing_spot)
                         blackboard.set("local_seguro_score", self.best_landing_score)
                         
@@ -240,14 +190,6 @@ class achar_local_seguro(py_trees.behaviour.Behaviour):
             return py_trees.common.Status.FAILURE
     
     def terminate(self, new_status):
-        # Para a thread de processamento
-        self.running = False
-        if self.thread and self.thread.is_alive():
-            self.thread.join(timeout=1.0)
-            
-        # Fecha a janela do cv2 quando o nodo é finalizado
-        cv2.destroyWindow("Camera Gazebo - Local Seguro")
-        
         if new_status == py_trees.common.Status.SUCCESS:
             if self.node:
                 self.node.get_logger().info("Local seguro encontrado com sucesso")

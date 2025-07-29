@@ -8,6 +8,8 @@ import os
 from precision_landing.nodos.achar_local_seguro import achar_local_seguro
 from precision_landing.nodos.img2local import img2local  
 from precision_landing.nodos.aproxima import aproxima
+from precision_landing.nodos.calibracao_dinamica import calibracao_dinamica
+from precision_landing.nodos.camera_feed import camera_feed
 from drone_behaviors.behavior_factory import BehaviorFactory
 from drone_behaviors.commander.px4_commander import PX4Commander
 
@@ -15,48 +17,65 @@ from drone_behaviors.commander.px4_commander import PX4Commander
 def build_behavior_tree(commander):
     root = py_trees.composites.Sequence(name="Missao Precision Landing", memory=True)
     
-    # Criar o nodo de detecção de câmera (achar_local_seguro)
+    # Criar nós do sistema de precisão
+    camera_feed_node = camera_feed("Camera Feed Continuo", commander)
     camera_detect = achar_local_seguro("Achar Local Seguro", commander)
+    calibracao_node = calibracao_dinamica("Calibracao Dinamica", commander)
+    converter_coord = img2local("Converter Imagem->NED")
+    aproximar_node = aproxima("Aproximar Local Seguro", commander)
     
     # 1. Sequência de takeoff (deve completar primeiro)
     takeoff_seq = BehaviorFactory.create_takeoff_sequence(commander, camera_detect)
     
-    # 2. Buscar local seguro (após takeoff completo)
-    buscar_local = camera_detect
+    # 2. Criar comportamento paralelo para camera feed (roda continuamente)
+    parallel_camera = py_trees.composites.Parallel(
+        name="Sistema Camera Paralelo",
+        policy=py_trees.common.ParallelPolicy.SuccessOnOne()  # Sucesso quando um filho completa
+    )
     
-    # 3. Converter posição da imagem para coordenadas NED
-    converter_coord = img2local("Converter Imagem->NED")
+    # 3. Sequência principal da missão (após takeoff)
+    mission_sequence = py_trees.composites.Sequence(name="Sequencia Missao Principal", memory=True)
+    mission_sequence.add_children([
+        # calibracao_node,    # 2º: Calibração dinâmica (temporariamente desabilitada)
+        camera_detect,      # 2º: Buscar local seguro (5s de estabilização) 
+        converter_coord,    # 3º: Converter pixel para NED (usa calibração se disponível)
+        aproximar_node      # 4º: Aproximar do local e pousar
+    ])
     
-    # 4. Aproximar do local usando comandos de velocidade
-    aproximar = aproxima("Aproximar Local Seguro", commander)
-    # Configurar o aproxima com as subscrições necessárias
-    aproximar.setup()
+    # Camera feed roda em paralelo com a missão principal
+    parallel_camera.add_children([
+        camera_feed_node,   # Feed contínuo da câmera
+        mission_sequence    # Sequência principal da missão
+    ])
     
-    # 5. Sequência de pouso - remover pois agora o aproxima faz o pouso
-    # landing_seq = BehaviorFactory.create_landing_sequence(commander)
-
     # Adiciona todos os nodos na sequência principal (execução sequencial)
     root.add_children([
         takeoff_seq,        # 1º: Takeoff (deve completar antes de prosseguir)
-        buscar_local,       # 2º: Buscar local seguro (5s de estabilização)
-        converter_coord,    # 3º: Converter pixel para NED
-        aproximar          # 4º: Aproximar do local e pousar
+        parallel_camera     # 2º: Camera feed + missão principal em paralelo
     ])
     
     tree = py_trees.trees.BehaviourTree(root)
     tree.setup(timeout=15)
     
-    # Configurar manualmente o img2local com o node
-    # Buscar o nó img2local na árvore e configurá-lo
-    def find_and_setup_img2local(node):
+    # Configurar manualmente os nós que precisam de setup
+    def setup_custom_nodes(node):
         if isinstance(node, img2local):
             node.setup(node=commander)
+        elif isinstance(node, aproxima):
+            node.setup()
+        # elif isinstance(node, calibracao_dinamica):
+        #     node.setup()  # Temporariamente desabilitado
+        elif isinstance(node, camera_feed):
+            node.setup()
+        elif isinstance(node, achar_local_seguro):
+            node.setup()
+        
         # Recursivamente buscar em nós compostos
         if hasattr(node, 'children'):
             for child in node.children:
-                find_and_setup_img2local(child)
+                setup_custom_nodes(child)
     
-    find_and_setup_img2local(root)
+    setup_custom_nodes(root)
     
     return tree
 
@@ -86,8 +105,10 @@ def main(args=None):
     rclpy.init(args=args)
     blackboard = py_trees.blackboard.Blackboard()
     
-    # Inicializa variáveis do blackboard se necessário
+    # Inicializa variáveis do blackboard
     blackboard.set("local_seguro_encontrado", False)
+    blackboard.set("calibration_available", False)
+    blackboard.set("camera_pronta", False)
 
     commander = PX4Commander()
     tree = build_behavior_tree(commander)
@@ -97,14 +118,41 @@ def main(args=None):
     # Gera a imagem da árvore de comportamento
     # gerar_imagem_arvore(tree)  # Comentado para evitar dependência do Graphviz
 
-    # Variáveis para tracking de mudanças
+    # Variáveis para tracking de mudanças e monitoring
     previous_tree_status = None
     previous_tree_display = None
+    tick_count = 0
+    last_blackboard_info = None
+    
+    def print_mission_status():
+        """Imprime status detalhado da missão"""
+        blackboard = py_trees.blackboard.Blackboard()
+        
+        # Coleta informações do blackboard
+        camera_pronta = blackboard.get("camera_pronta") if blackboard.exists("camera_pronta") else False
+        calibration_available = blackboard.get("calibration_available") if blackboard.exists("calibration_available") else False
+        local_seguro_encontrado = blackboard.get("local_seguro_encontrado") if blackboard.exists("local_seguro_encontrado") else False
+        
+        print("\n" + "🚁 " + "="*50 + " STATUS MISSÃO " + "="*50)
+        print(f"📷 Camera Feed: {'✅ ATIVO' if camera_pronta else '❌ INATIVO'}")
+        print(f"🎯 Calibração: {'✅ DISPONÍVEL' if calibration_available else '⏳ PENDENTE'}")
+        print(f"📍 Local Seguro: {'✅ ENCONTRADO' if local_seguro_encontrado else '🔍 BUSCANDO'}")
+        
+        if blackboard.exists("local_seguro_pixel"):
+            pixel_pos = blackboard.get("local_seguro_pixel")
+            print(f"📌 Posição Pixel: {pixel_pos}")
+            
+        if blackboard.exists("target_ned_position"):
+            ned_pos = blackboard.get("target_ned_position")
+            print(f"🧭 Posição NED: N={ned_pos['x']:.2f}m, E={ned_pos['y']:.2f}m")
+        
+        print("="*112 + "\n")
     
     try:
         while rclpy.ok():
             rclpy.spin_once(commander, timeout_sec=0.1)
             tree.tick()
+            tick_count += 1
             
             # Verifica se houve mudança no status da árvore
             current_tree_status = tree.root.status
@@ -116,20 +164,41 @@ def main(args=None):
             
             if status_changed or display_changed:
                 print("\n" + "="*60)
-                print(f"🌳 ÁRVORE ATUALIZADA - Status: {current_tree_status}")
+                print(f"🌳 ÁRVORE ATUALIZADA - Status: {current_tree_status} - Tick: {tick_count}")
                 print("="*60)
                 print(current_tree_display)
-                print("="*60 + "\n")
+                print("="*60)
+                
+                # Imprime status detalhado da missão
+                print_mission_status()
                 
                 # Atualiza os valores anteriores
                 previous_tree_status = current_tree_status
                 previous_tree_display = current_tree_display
+            
+            # Status de progresso a cada 100 ticks (aprox. 5s)
+            elif tick_count % 100 == 0:
+                blackboard = py_trees.blackboard.Blackboard()
+                current_blackboard_info = {
+                    'camera_pronta': blackboard.get("camera_pronta") if blackboard.exists("camera_pronta") else False,
+                    'calibration_available': blackboard.get("calibration_available") if blackboard.exists("calibration_available") else False,
+                    'local_seguro_encontrado': blackboard.get("local_seguro_encontrado") if blackboard.exists("local_seguro_encontrado") else False
+                }
+                
+                # Só imprime se houve mudança no blackboard
+                if current_blackboard_info != last_blackboard_info:
+                    print(f"⏱️  Tick {tick_count} - Status: Camera={'✅' if current_blackboard_info['camera_pronta'] else '❌'}, "
+                          f"Calibração={'✅' if current_blackboard_info['calibration_available'] else '⏳'}, "
+                          f"Local={'✅' if current_blackboard_info['local_seguro_encontrado'] else '🔍'}")
+                    last_blackboard_info = current_blackboard_info
 
             if tree.root.status == py_trees.common.Status.SUCCESS:
-                commander.get_logger().info("Missão de precision landing completa.")
+                commander.get_logger().info("🎉 Missão de precision landing COMPLETA!")
+                print_mission_status()
                 break
             elif tree.root.status == py_trees.common.Status.FAILURE:
-                commander.get_logger().error("Missão falhou.")
+                commander.get_logger().error("❌ Missão FALHOU!")
+                print_mission_status()
                 break
 
             time.sleep(0.05)  # Tick rate ~20Hz
