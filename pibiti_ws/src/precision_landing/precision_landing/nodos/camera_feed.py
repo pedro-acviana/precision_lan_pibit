@@ -42,18 +42,6 @@ class camera_feed(py_trees.behaviour.Behaviour):
             self.cam = GzCam(self.camera_topic, self.camera_resolution)
             self.logger.info("GzCam inicializada com sucesso para camera_feed")
             
-            # Teste de OpenCV para display
-            try:
-                # Cria uma imagem de teste pequena
-                test_img = np.zeros((100, 100, 3), dtype=np.uint8)
-                cv2.putText(test_img, 'TEST', (10, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
-                cv2.imshow("Camera Feed - Sistema de Precisao", test_img)
-                cv2.waitKey(1)
-                self.logger.info("Teste OpenCV: Janela criada com sucesso")
-            except Exception as opencv_error:
-                self.logger.error(f"Erro no teste OpenCV: {opencv_error}")
-                self.logger.warning("Display pode não funcionar - continuando sem visualização")
-            
             # Iniciar thread de processamento contínuo
             self.running = True
             self.thread = threading.Thread(target=self.process_camera, daemon=True)
@@ -111,6 +99,53 @@ class camera_feed(py_trees.behaviour.Behaviour):
                 cv2.circle(display_image, (center_x, center_y), 10, (0, 0, 255), 2)  # Centro vermelho
                 cv2.putText(display_image, 'Centro', 
                            (center_x + 15, center_y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
+                
+                # NOVA FUNCIONALIDADE: Mostra informações de análise do achar_local_seguro
+                if blackboard.exists("analysis_active") and blackboard.get("analysis_active"):
+                    current_position = blackboard.get("analysis_current_position")
+                    current_score = blackboard.get("analysis_current_score")
+                    
+                    if current_position is not None:
+                        # Desenha o local detectado atual
+                        cv2.circle(display_image, current_position, 25, (0, 255, 0), 3)  # Círculo verde
+                        cv2.circle(display_image, current_position, 8, (0, 255, 0), -1)   # Centro preenchido
+                        cv2.putText(display_image, f'Local Detectado', 
+                                   (current_position[0] + 30, current_position[1]), 
+                                   cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+                        if current_score is not None:
+                            cv2.putText(display_image, f'Score: {current_score:.1f}', 
+                                       (current_position[0] + 30, current_position[1] + 25), 
+                                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
+                        
+                        # Desenha retângulo ao redor da área
+                        block_size = 100
+                        top_left = (current_position[0] - block_size//2, current_position[1] - block_size//2)
+                        bottom_right = (current_position[0] + block_size//2, current_position[1] + block_size//2)
+                        cv2.rectangle(display_image, top_left, bottom_right, (0, 255, 0), 2)
+                
+                # Mostra melhor local global da estabilização
+                if blackboard.exists("analysis_best_global"):
+                    best_global = blackboard.get("analysis_best_global")
+                    best_global_score = blackboard.get("analysis_best_global_score")
+                    
+                    if best_global is not None:
+                        cv2.circle(display_image, best_global, 20, (0, 255, 255), 2)  # Círculo amarelo
+                        cv2.putText(display_image, f'Melhor Global: {best_global_score:.1f}', 
+                                   (best_global[0] + 30, best_global[1] - 10), 
+                                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 1)
+                
+                # Status da estabilização
+                if blackboard.exists("analysis_stabilization_phase"):
+                    stabilization_phase = blackboard.get("analysis_stabilization_phase")
+                    
+                    if stabilization_phase:
+                        elapsed = blackboard.get("analysis_stabilization_elapsed", 0)
+                        duration = blackboard.get("analysis_stabilization_duration", 5)
+                        cv2.putText(display_image, f'Estabilizando: {elapsed:.1f}s / {duration}s', 
+                                   (10, h - 120), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), 2)
+                    else:
+                        cv2.putText(display_image, 'ESTABILIZADO - LOCAL FIXADO', 
+                                   (10, h - 120), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
                 
                 # Informações do sistema
                 cv2.putText(display_image, f'Resolucao: {w}x{h}', 

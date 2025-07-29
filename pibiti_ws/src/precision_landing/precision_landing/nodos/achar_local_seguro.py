@@ -153,14 +153,21 @@ class achar_local_seguro(py_trees.behaviour.Behaviour):
                     # Ainda na fase de estabilização, continua buscando
                     best_position, best_score = self.analisar_local_seguro(image)
                     
-                    # Visualiza a imagem com as análises
-                    self.display_analysis_image(image, best_position, best_score)
+                    # Salva informações de análise no blackboard para o camera_feed visualizar
+                    blackboard.set("analysis_active", True)
+                    blackboard.set("analysis_current_position", best_position)
+                    blackboard.set("analysis_current_score", best_score)
+                    blackboard.set("analysis_stabilization_phase", True)
+                    blackboard.set("analysis_stabilization_elapsed", elapsed_time)
+                    blackboard.set("analysis_stabilization_duration", self.stabilization_duration)
                     
                     if best_position is not None:
                         # Durante a estabilização, atualiza o melhor local se encontrar um melhor
                         if best_score < self.best_landing_score:
                             self.best_landing_spot = best_position
                             self.best_landing_score = best_score
+                            blackboard.set("analysis_best_global", self.best_landing_spot)
+                            blackboard.set("analysis_best_global_score", self.best_landing_score)
                             if self.node:
                                 self.node.get_logger().info(f"Novo melhor local durante estabilização: {best_position}, score: {best_score:.2f}")
                     
@@ -168,15 +175,21 @@ class achar_local_seguro(py_trees.behaviour.Behaviour):
                 else:
                     # Fase de estabilização concluída
                     self.stabilization_phase = False
+                    blackboard.set("analysis_stabilization_phase", False)
+                    
                     if self.best_landing_spot is not None:
                         # Salva o melhor local encontrado no blackboard
                         blackboard.set("local_seguro_pixel", self.best_landing_spot)
                         blackboard.set("local_seguro_score", self.best_landing_score)
+                        blackboard.set("analysis_best_global", self.best_landing_spot)
+                        blackboard.set("analysis_best_global_score", self.best_landing_score)
+                        blackboard.set("analysis_active", False)  # Análise concluída
                         
                         if self.node:
                             self.node.get_logger().info(f"Estabilização concluída! Melhor local fixado: {self.best_landing_spot}, score: {self.best_landing_score:.2f}")
                         return py_trees.common.Status.SUCCESS
                     else:
+                        blackboard.set("analysis_active", False)
                         if self.node:
                             self.node.get_logger().warn("Nenhum local seguro encontrado durante estabilização")
                         return py_trees.common.Status.FAILURE

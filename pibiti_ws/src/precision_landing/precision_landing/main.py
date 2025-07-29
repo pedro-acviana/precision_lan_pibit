@@ -44,11 +44,11 @@ def build_behavior_tree(commander):
     
     # Camera feed roda em paralelo com a missão principal
     parallel_camera.add_children([
-        camera_feed_node,   # Feed contínuo da câmera
+        camera_feed_node,   # Feed contínuo da câmera (ÚNICO acesso à câmera física)
         mission_sequence    # Sequência principal da missão
     ])
     
-    # Adiciona todos os nodos na sequência principal (execução sequencial)
+    # 2. Sequência principal da missão (após takeoff)
     root.add_children([
         takeoff_seq,        # 1º: Takeoff (deve completar antes de prosseguir)
         parallel_camera     # 2º: Camera feed + missão principal em paralelo
