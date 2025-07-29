@@ -29,17 +29,18 @@ def build_behavior_tree(commander):
     
     # 4. Aproximar do local usando comandos de velocidade
     aproximar = aproxima("Aproximar Local Seguro", commander)
+    # Configurar o aproxima com as subscrições necessárias
+    aproximar.setup()
     
-    # 5. Sequência de pouso
-    landing_seq = BehaviorFactory.create_landing_sequence(commander)
+    # 5. Sequência de pouso - remover pois agora o aproxima faz o pouso
+    # landing_seq = BehaviorFactory.create_landing_sequence(commander)
 
     # Adiciona todos os nodos na sequência principal (execução sequencial)
     root.add_children([
         takeoff_seq,        # 1º: Takeoff (deve completar antes de prosseguir)
         buscar_local,       # 2º: Buscar local seguro (5s de estabilização)
         converter_coord,    # 3º: Converter pixel para NED
-        aproximar,         # 4º: Aproximar do local
-        landing_seq        # 5º: Pousar
+        aproximar          # 4º: Aproximar do local e pousar
     ])
     
     tree = py_trees.trees.BehaviourTree(root)

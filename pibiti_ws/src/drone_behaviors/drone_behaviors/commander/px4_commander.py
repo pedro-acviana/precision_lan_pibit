@@ -62,7 +62,7 @@ class PX4Commander(Node):
         self.current_position = [0.0, 0.0, 0.0]
         self.center_data = None
 
-        self.target_altitude = 1.0
+        self.target_altitude = 2.0
         self.initial_yaw = None  # Armazena o yaw inicial do drone
         self.clock = self.get_clock()
 

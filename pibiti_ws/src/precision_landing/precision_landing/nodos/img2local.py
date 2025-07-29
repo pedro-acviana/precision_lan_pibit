@@ -16,6 +16,25 @@ class img2local(py_trees.behaviour.Behaviour):
         self.image_width = 1280   # Largura da imagem em pixels
         self.image_height = 960   # Altura da imagem em pixels
         
+        # NOVO: Parâmetros de distância focal para maior precisão
+        # Opção 1: Distância focal em mm (se conhecida)
+        self.focal_length_mm = 3.6  # Exemplo: 3.6mm (ajustar conforme sua câmera)
+        self.sensor_width_mm = 6.17  # Largura do sensor em mm (ajustar conforme sua câmera)
+        self.sensor_height_mm = 4.63  # Altura do sensor em mm (ajustar conforme sua câmera)
+        
+        # Opção 2: Calcular distância focal em pixels a partir do FOV
+        self.use_focal_length = True  # True = usar focal length, False = usar FOV
+        
+        # Calcula distância focal em pixels
+        if self.use_focal_length and self.focal_length_mm > 0:
+            # Converte focal length de mm para pixels
+            self.focal_length_x_pixels = (self.focal_length_mm * self.image_width) / self.sensor_width_mm
+            self.focal_length_y_pixels = (self.focal_length_mm * self.image_height) / self.sensor_height_mm
+        else:
+            # Calcula focal length em pixels a partir do FOV
+            self.focal_length_x_pixels = (self.image_width / 2) / math.tan(self.camera_fov_horizontal / 2)
+            self.focal_length_y_pixels = (self.image_height / 2) / math.tan(self.camera_fov_vertical / 2)
+        
         # Inicializa variáveis
         self.current_altitude = None
         self.node = None
@@ -102,9 +121,20 @@ class img2local(py_trees.behaviour.Behaviour):
             offset_x_pixels = pixel_x - center_x
             offset_y_pixels = pixel_y - center_y
             
-            # Converte para ângulos
-            angle_x = (offset_x_pixels / self.image_width) * self.camera_fov_horizontal
-            angle_y = (offset_y_pixels / self.image_height) * self.camera_fov_vertical
+            # MÉTODO MELHORADO: Converte para ângulos usando distância focal
+            if self.use_focal_length:
+                # Método mais preciso usando distância focal
+                angle_x = math.atan(offset_x_pixels / self.focal_length_x_pixels)
+                angle_y = math.atan(offset_y_pixels / self.focal_length_y_pixels)
+                
+                self.logger.info(f"Usando distância focal - Focal X: {self.focal_length_x_pixels:.1f}px, Focal Y: {self.focal_length_y_pixels:.1f}px")
+                self.logger.info(f"Ângulos calculados (focal): X={math.degrees(angle_x):.2f}°, Y={math.degrees(angle_y):.2f}°")
+            else:
+                # Método original usando FOV (linear)
+                angle_x = (offset_x_pixels / self.image_width) * self.camera_fov_horizontal
+                angle_y = (offset_y_pixels / self.image_height) * self.camera_fov_vertical
+                
+                self.logger.info(f"Usando FOV linear - Ângulos calculados: X={math.degrees(angle_x):.2f}°, Y={math.degrees(angle_y):.2f}°")
             
             # Converte ângulos para distâncias no solo usando trigonometria
             # Câmera aponta para a frente - usa altitude para calcular distância no solo
@@ -115,7 +145,8 @@ class img2local(py_trees.behaviour.Behaviour):
             distance_north = altitude * math.tan(angle_y)  # Positivo = à frente
             
             # Distância lateral (East em NED) - baseada no ângulo horizontal da câmera  
-            distance_east = altitude * math.tan(angle_x)   # Positivo = à direita
+        
+            distance_east = -altitude * math.tan(angle_x)   # Negativo = à esquerda (oeste), Positivo = à direita (leste)
             
             # Em NED: North (X), East (Y), Down (Z)
             ned_target = {

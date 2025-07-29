@@ -45,7 +45,7 @@ class Takeoff(py_trees.behaviour.Behaviour):
         # Timeout de segurança (30 segundos máximo)
         if time.time() - self.start_time > 30.0:
             self.cmdr.get_logger().warn("Timeout no takeoff - forçando sucesso")
-            return py_trees.common.Status.SUCCESS
+            return py_trees.common.Status.FAILURE
         
         # Verifica se temos dados de altitude atual via subscriber
         if self.current_altitude is None:
