@@ -16,7 +16,8 @@ class aproxima(py_trees.behaviour.Behaviour):
         
         # Dados de posição atual do drone
         self.current_position = None
-        self.target_ned_absolute = None  # Posição absoluta do alvo
+        # Posição absoluta do alvo (calculada uma vez no início)
+        self.target_absolute_position = None
         
         # Subscrições ROS2
         self.position_subscriber = None
@@ -57,41 +58,40 @@ class aproxima(py_trees.behaviour.Behaviour):
             'z': msg.z   # Baixo (NED)
         }
     def initialise(self):
-        """Inicializa a aproximação calculando a posição absoluta do alvo"""
-        self.logger.info("Iniciando aproximação ao local seguro usando comandos de velocidade")
+        """Inicializa a aproximação calculando a posição absoluta do alvo uma vez"""
+        self.logger.info("Iniciando aproximação ao local seguro usando coordenadas relativas")
         self.target_reached = False
         self.landing_phase = False
         
         try:
+            # Obtém as coordenadas relativas do blackboard
             blackboard = py_trees.blackboard.Blackboard()
-            
-            # Obtém a posição alvo relativa em NED
-            if not blackboard.exists("target_ned_position"):
-                self.logger.error("Posição alvo NED não encontrada no blackboard")
+            if not blackboard.exists("target_relative_position"):
+                self.logger.error("Posição relativa do alvo não encontrada no blackboard")
                 return
                 
-            target_ned_relative = blackboard.get("target_ned_position")
+            target_relative = blackboard.get("target_relative_position")
             
             # Aguarda ter a posição atual do drone
             if self.current_position is None:
                 self.logger.warning("Aguardando posição atual do drone...")
                 return
-            
-            # Calcula posição absoluta do alvo (posição atual do drone + offset relativo)
-            self.target_ned_absolute = {
-                'x': self.current_position['x'] + target_ned_relative['x'],
-                'y': self.current_position['y'] + target_ned_relative['y'],
-                'z': self.current_position['z']  # Mantém a altitude atual inicialmente
+                
+            # Calcula posição absoluta do alvo (uma vez só no início)
+            self.target_absolute_position = {
+                'x': self.current_position['x'] + target_relative['x'],
+                'y': self.current_position['y'] + target_relative['y'],
+                'z': self.current_position['z']  # Mantém altitude atual
             }
             
-            self.logger.info(f"Alvo absoluto calculado: x={self.target_ned_absolute['x']:.2f}, y={self.target_ned_absolute['y']:.2f}")
+            self.logger.info(f"Alvo absoluto calculado: x={self.target_absolute_position['x']:.2f}, y={self.target_absolute_position['y']:.2f}")
             
         except Exception as e:
             self.logger.error(f"Erro na inicialização da aproximação: {e}")
         
     def update(self):
         """
-        Move o drone até o local seguro e executa pouso preciso
+        Move o drone calculando distância restante até o alvo e executa pouso preciso
         """
         try:
             # Verifica se tem posição atual do drone
@@ -100,21 +100,21 @@ class aproxima(py_trees.behaviour.Behaviour):
                 return py_trees.common.Status.RUNNING
             
             # Verifica se o alvo absoluto foi calculado
-            if self.target_ned_absolute is None:
+            if self.target_absolute_position is None:
                 self.logger.warning("Alvo absoluto não calculado ainda...")
                 return py_trees.common.Status.RUNNING
             
-            # Calcula distância atual até o alvo
-            distance_x = self.target_ned_absolute['x'] - self.current_position['x']
-            distance_y = self.target_ned_absolute['y'] - self.current_position['y']
+            # Calcula distância ATUAL (restante) até o alvo absoluto
+            distance_x = self.target_absolute_position['x'] - self.current_position['x']
+            distance_y = self.target_absolute_position['y'] - self.current_position['y']
             horizontal_distance = math.sqrt(distance_x**2 + distance_y**2)
             
-            # Verifica se chegou na posição horizontal (fase de pouso)
-            if horizontal_distance < self.tolerance and not self.landing_phase:
-                self.landing_phase = True
-                self.logger.info(f"Posição horizontal alcançada! Iniciando pouso preciso...")
-            
-            if self.landing_phase:
+            # Verifica se chegou na posição horizontal (tolerância)
+            if horizontal_distance < self.tolerance:
+                if not self.landing_phase:
+                    self.landing_phase = True
+                    self.logger.info(f"Posição horizontal alcançada! Iniciando pouso preciso...")
+                
                 # Verifica se o drone está muito baixo (menor que 50cm) - deve pousar
                 current_altitude = abs(self.current_position['z'])  # Altitude positiva
                 if current_altitude < 0.5:  # Menor que 50cm
@@ -123,14 +123,13 @@ class aproxima(py_trees.behaviour.Behaviour):
                     self.commander.publish_velocity_setpoint(0.0, 0.0, 0.0)
                     return py_trees.common.Status.SUCCESS
                 
-                # Fase de pouso: mantém posição X,Y e desce com velocidade controlada
-                # Calcula pequenas correções para manter posição precisa
-                correction_x = -distance_x * 0.5  # Gain proporcional para correção
-                correction_y = -distance_y * 0.5
+                # Fase de pouso: pequenas correções e descida controlada
+                correction_x = -distance_x * 0.3  # Correção suave baseada na distância restante
+                correction_y = -distance_y * 0.3
                 
                 # Limita correções para evitar movimentos bruscos
-                correction_x = max(-0.3, min(0.3, correction_x))
-                correction_y = max(-0.3, min(0.3, correction_y))
+                correction_x = max(-0.2, min(0.2, correction_x))
+                correction_y = max(-0.2, min(0.2, correction_y))
                 
                 # Comando de pouso com correção de posição
                 self.commander.publish_velocity_setpoint(
@@ -139,29 +138,29 @@ class aproxima(py_trees.behaviour.Behaviour):
                     self.landing_velocity   # Descida controlada
                 )
                 
-                self.logger.info(f"Pousando: alt={current_altitude:.2f}m, x_corr={correction_x:.3f}, y_corr={correction_y:.3f}, z_vel={self.landing_velocity}")
+                self.logger.info(f"Pousando: alt={current_altitude:.2f}m, dist_restante={horizontal_distance:.3f}m, corr=({correction_x:.3f}, {correction_y:.3f})")
                 
-                # Continua descendo até atingir altura crítica
                 return py_trees.common.Status.RUNNING
                 
             else:
-                # Fase de aproximação horizontal
-                # Calcula velocidades proporcionais à distância
+                # Fase de aproximação: calcula velocidades baseadas na distância restante
                 if horizontal_distance > 0:
-                    velocity_x = (distance_x / horizontal_distance) * min(self.max_velocity, horizontal_distance)
-                    velocity_y = (distance_y / horizontal_distance) * min(self.max_velocity, horizontal_distance)
+                    # Normaliza direção e aplica velocidade baseada na distância
+                    velocity_factor = min(self.max_velocity, horizontal_distance) / horizontal_distance
+                    velocity_x = distance_x * velocity_factor
+                    velocity_y = distance_y * velocity_factor
                 else:
                     velocity_x = 0.0
                     velocity_y = 0.0
                 
                 # Envia comando de velocidade (mantém altitude)
                 self.commander.publish_velocity_setpoint(
-                    velocity_x,  # Velocidade Norte
-                    velocity_y,  # Velocidade Leste  
+                    velocity_x,  # Velocidade Norte (baseada na distância restante)
+                    velocity_y,  # Velocidade Leste (baseada na distância restante)
                     0.0          # Mantém altitude
                 )
                 
-                self.logger.info(f"Aproximando: dist={horizontal_distance:.2f}m, vel=({velocity_x:.2f}, {velocity_y:.2f})")
+                self.logger.info(f"Aproximando: dist_restante={horizontal_distance:.2f}m, vel=({velocity_x:.2f}, {velocity_y:.2f})")
                 
                 return py_trees.common.Status.RUNNING
             

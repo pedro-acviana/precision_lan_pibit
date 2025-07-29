@@ -69,11 +69,11 @@ class img2local(py_trees.behaviour.Behaviour):
         self.current_altitude = msg.z
         
     def initialise(self):
-        self.logger.info("Iniciando conversão de coordenadas pixel para NED")
+        self.logger.info("Iniciando conversão de coordenadas pixel para coordenadas relativas")
         
     def update(self):
         """
-        Converte a posição em pixels para coordenadas NED relativas ao drone
+        Converte a posição em pixels para coordenadas relativas ao drone
         """
         try:
             blackboard = py_trees.blackboard.Blackboard()
@@ -137,38 +137,39 @@ class img2local(py_trees.behaviour.Behaviour):
                 self.logger.info(f"Usando FOV linear - Ângulos calculados: X={math.degrees(angle_x):.2f}°, Y={math.degrees(angle_y):.2f}°")
             
             # Converte ângulos para distâncias no solo usando trigonometria
-            # Câmera aponta para a frente - usa altitude para calcular distância no solo
-            # Para câmera frontal: Y da imagem corresponde à distância à frente (X em NED)
-            # X da imagem corresponde ao lado esquerdo/direito (Y em NED)
+            # LÓGICA CORRIGIDA:
+            # - Y na imagem: drone sempre vai PARA FRENTE (distance_north sempre positivo)
+            # - X na imagem: drone vai esquerda/direita baseado na posição relativa ao centro
             
-            # Distância à frente (North em NED) - baseada no ângulo vertical da câmera
-            distance_north = altitude * math.tan(angle_y)  # Positivo = à frente
+            # Distância à frente (North em NED) - sempre positiva pois drone sempre vai para frente
+            # Usa a distância absoluta do pixel Y ao centro como referência de quão longe ir
+            distance_north = altitude * math.tan(abs(angle_y))  # Sempre positivo = sempre à frente
             
-            # Distância lateral (East em NED) - baseada no ângulo horizontal da câmera  
-        
-            distance_east = -altitude * math.tan(angle_x)   # Negativo = à esquerda (oeste), Positivo = à direita (leste)
+            # Distância lateral (East em NED) - baseada na posição X relativa ao centro da imagem
+            distance_east = altitude * math.tan(angle_x)   # Negativo = esquerda, Positivo = direita
             
-            # Em NED: North (X), East (Y), Down (Z)
-            ned_target = {
-                'x': distance_north,   # Norte
-                'y': distance_east,    # Leste  
-                'z': 0                 # Manter mesma altitude (diferença Z = 0)
+            # Coordenadas RELATIVAS ao drone (não absolutas)
+            # O drone se moverá estas distâncias a partir da posição atual
+            relative_target = {
+                'x': distance_north,   # Distância para frente (Norte)
+                'y': distance_east,    # Distância lateral (Leste)  
+                'z': 0                 # Manter mesma altitude
             }
             
-            # Armazena no blackboard
-            blackboard.set("target_ned_position", ned_target)
+            # Armazena no blackboard como coordenadas relativas
+            blackboard.set("target_relative_position", relative_target)
             
-            self.logger.info(f"Conversão pixel->NED: pixel({pixel_x}, {pixel_y}) -> NED({distance_north:.2f}, {distance_east:.2f}, 0)")
+            self.logger.info(f"Conversão pixel->Relativo: pixel({pixel_x}, {pixel_y}) -> Relativo({distance_north:.2f}, {distance_east:.2f}, 0)")
             self.logger.info(f"Altitude do drone: {altitude:.2f}m")
             
             return py_trees.common.Status.SUCCESS
             
         except Exception as e:
-            self.logger.error(f"Erro na conversão pixel para NED: {e}")
+            self.logger.error(f"Erro na conversão pixel para coordenadas relativas: {e}")
             return py_trees.common.Status.FAILURE
     
     def terminate(self, new_status):
         if new_status == py_trees.common.Status.SUCCESS:
-            self.logger.info("Conversão pixel->NED concluída com sucesso")
+            self.logger.info("Conversão pixel->relativo concluída com sucesso")
         else:
-            self.logger.info("Conversão pixel->NED finalizada")
+            self.logger.info("Conversão pixel->relativo finalizada")
