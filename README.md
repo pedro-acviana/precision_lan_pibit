@@ -80,22 +80,29 @@ precision_lan_pibit/
 ## 🎮 Funcionalidades Implementadas
 
 ### ✅ **Sistema de Visão**
-- [x] Captura de imagem em tempo real via Gazebo
-- [x] Detecção de locais seguros para pouso
-- [x] Análise de variação de textura para identificar áreas planas
-- [x] Visualização em tempo real com marcações
+- [x] Captura de imagem em tempo real via Gazebo (resolução 1280x960)
+- [x] Detecção de locais seguros com análise FAST features
+- [x] Sistema de estabilização e rastreamento de alvo (5 segundos)
+- [x] Conversão pixel-para-coordenadas com parâmetros intrínsecos de câmera
+- [x] Suporte a câmera frontal com cálculo trigonométrico de projeção
+- [x] Visualização em tempo real com marcações e score de qualidade
 
 ### ✅ **Controle de Voo**
 - [x] Armamento e desarmamento automático
 - [x] Modo Offboard para controle customizado
-- [x] Controle de altitude e posição
-- [x] Sequências de decolagem e pouso
+- [x] Controle de velocidade adaptativo baseado em altitude e distância
+- [x] Sistema de coordenadas customizado (X=longitudinal, Y=lateral)
+- [x] Sincronização de takeoff com flags de blackboard
+- [x] Controle proporcional suavizado para aproximação precisa
+- [x] Sequências de decolagem e pouso com validação de altitude
 
 ### ✅ **Arquitetura de Controle**
-- [x] Árvores de comportamento (Behavior Trees)
-- [x] Execução paralela de tarefas
-- [x] Sistema de blackboard para compartilhamento de dados
-- [x] Condições de segurança integradas
+- [x] Árvores de comportamento (Behavior Trees) com execução paralela
+- [x] Processamento paralelo: detecção contínua durante toda a missão
+- [x] Sistema de blackboard para sincronização entre nodos
+- [x] Fases de estabilização antes da conversão de coordenadas
+- [x] Condições de segurança integradas com validação de horizonte
+- [x] Threading daemon para processamento de câmera em background
 
 ### 🔄 **Em Desenvolvimento**
 - [ ] Controle adaptativo para diferentes condições de vento
@@ -105,6 +112,28 @@ precision_lan_pibit/
 - [ ] Sistema de recuperação de falhas
 
 ## 🛠️ Instalação e Configuração
+
+### **Implementações Técnicas Principais**
+
+#### **Sistema de Coordenadas Customizado**
+- **X**: Movimento longitudinal (frente/trás) 
+- **Y**: Movimento lateral (direita/esquerda)
+- **Mapeamento NED**: Conversão automática para o sistema PX4 (Norte-Leste-Down)
+
+#### **Processamento Paralelo**
+- **Thread principal**: Árvore de comportamento e controle de missão
+- **Thread de câmera**: Captura e análise contínua de imagem
+- **Sincronização**: Blackboard compartilhado entre threads
+
+#### **Estabilização Inteligente**
+- **Período de análise**: 5 segundos de observação antes da decisão
+- **Rastreamento de alvo**: Fixação no melhor local detectado
+- **Score de qualidade**: Avaliação contínua da adequação do local
+
+#### **Visão Computacional Avançada**
+- **Parâmetros intrínsecos**: Calibração precisa da câmera (fx, fy, cx, cy)
+- **Projeção trigonométrica**: Cálculo de distâncias reais no solo
+- **Validação de horizonte**: Apenas pixels abaixo do horizonte são válidos
 
 ### **Pré-requisitos**
 ```bash
@@ -145,24 +174,31 @@ ros2 run precision_landing main
 
 ### **Métricas de Performance**
 - **Precisão de pouso**: < 50cm do ponto alvo
-- **Tempo de estabilização**: < 5 segundos
+- **Tempo de estabilização**: 5 segundos (configurável)
 - **Taxa de sucesso**: > 95% em condições normais
 - **Frequência de controle**: 20Hz (tempo real)
+- **Resolução de câmera**: 1280x960 pixels
+- **Sistema de coordenadas**: X=longitudinal, Y=lateral (customizado)
 
 ### **Condições de Teste**
 - Terrenos planos e inclinados
 - Diferentes condições de iluminação
 - Presença de obstáculos
 - Variações de vento simuladas
+- Câmera frontal com validação de horizonte
+- Sincronização de takeoff e estabilização
 
 ## 🔬 Contribuições Científicas
 
 Este projeto avança o estado da arte em:
 
 1. **Controle Adaptativo**: Algoritmos que se adaptam em tempo real às condições do ambiente
-2. **Visão Computacional**: Técnicas robustas para detecção de locais seguros
-3. **Arquiteturas Híbridas**: Combinação de controle clássico com árvores de comportamento
+2. **Visão Computacional**: Técnicas robustas para detecção de locais seguros com câmera frontal
+3. **Arquiteturas Híbridas**: Combinação de controle clássico com árvores de comportamento paralelas
 4. **Sistemas Embarcados**: Implementação eficiente para hardware limitado
+5. **Coordenadas Customizadas**: Sistema de mapeamento adaptado para controle de drones
+6. **Sincronização Temporal**: Coordenação precisa entre processamento de visão e controle
+7. **Estabilização Inteligente**: Período de análise antes da tomada de decisão de pouso
 
 ## 📈 Roadmap de Desenvolvimento
 
@@ -173,8 +209,11 @@ Este projeto avança o estado da arte em:
 
 ### **Fase 2: Controle Básico** ✅
 - [x] Sistema de decolagem e pouso automático
-- [x] Detecção de locais seguros
-- [x] Controle de posição básico
+- [x] Detecção de locais seguros com estabilização
+- [x] Controle de posição com sistema de coordenadas customizado
+- [x] Conversão precisa pixel-para-mundo com trigonometria
+- [x] Execução paralela de detecção durante missão completa
+- [x] Sincronização entre nodos via blackboard
 
 ### **Fase 3: Controle Avançado** 🔄
 - [ ] Implementação de filtros adaptativos
