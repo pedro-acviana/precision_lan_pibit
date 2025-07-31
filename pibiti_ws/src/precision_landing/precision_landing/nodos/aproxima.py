@@ -54,9 +54,9 @@ class aproxima(py_trees.behaviour.Behaviour):
     def local_position_callback(self, msg):
         """Callback para receber posição local do drone"""
         self.current_position = {
-            'x': msg.x,  # Norte (NED)
-            'y': msg.y,  # Leste (NED)
-            'z': msg.z   # Baixo (NED)
+            'x': msg.y,  # X = Lateral 
+            'y': msg.x,  # Y = Longitudinal)
+            'z': msg.z   # Vertical 
         }
     
     def initialise(self):
@@ -66,7 +66,7 @@ class aproxima(py_trees.behaviour.Behaviour):
         self.landing_phase = False
         self.last_velocity = np.array([0.0, 0.0, 0.0])
         
-        # Calcula o alvo absoluto UMA VEZ no início
+        # Calcula o alvo absoluto
         try:
             blackboard = py_trees.blackboard.Blackboard()
             if not blackboard.exists("target_relative_position"):
@@ -124,17 +124,17 @@ class aproxima(py_trees.behaviour.Behaviour):
                 self.logger.warning("Alvo absoluto não calculado ainda...")
                 return py_trees.common.Status.RUNNING
 
-            # Calcula o ERRO como diferença entre alvo absoluto (fixo) e posição atual
-            error_x = self.target_absolute_position['x'] - self.current_position['x']  # Norte/Sul
-            error_y = self.target_absolute_position['y'] - self.current_position['y']  # Leste/Oeste
+            # Calcula o erro como diferença entre alvo absoluto (fixo) e posição atual
+            error_x = self.target_absolute_position['x'] - self.current_position['x'] 
+            error_y = self.target_absolute_position['y'] - self.current_position['y']  
             distance_horizontal = math.sqrt(error_x**2 + error_y**2)
             
             # Controle proporcional baseado no erro
             kp = 1.0  # Ganho proporcional
             
             # Calcula velocidades proporcionais ao erro
-            velocity_x = kp * error_x  # Norte/Sul
-            velocity_y = kp * error_y  # Leste/Oeste
+            velocity_x = kp * error_x  
+            velocity_y = kp * error_y  
             
             # Aplica velocidade adaptativa baseada na distância e altitude
             current_altitude = abs(self.current_position['z'])
@@ -158,7 +158,7 @@ class aproxima(py_trees.behaviour.Behaviour):
             if distance_horizontal < self.tolerance:
                 if not self.landing_phase:
                     self.landing_phase = True
-                    self.logger.info("Alvo alcançado! Iniciando fase de pouso preciso!")
+                    self.logger.warning("Alvo alcançado! Iniciando fase de pouso preciso!")
                 
                 # Durante o pouso, para movimento horizontal e desce
                 velocity_x = 0.0
@@ -173,14 +173,19 @@ class aproxima(py_trees.behaviour.Behaviour):
             else:
                 velocity_z = 0.0  # Mantém altitude durante aproximação
 
-            # Envia o comando de velocidade
-            self.commander.publish_velocity_setpoint(velocity_x, velocity_y, velocity_z)
+            self.commander.publish_velocity_setpoint(velocity_y, velocity_x, velocity_z)
 
-            # Log detalhado para debug
-            self.logger.info(f"Posição atual: ({self.current_position['x']:.2f}, {self.current_position['y']:.2f})")
-            self.logger.info(f"Alvo absoluto FIXO: ({self.target_absolute_position['x']:.2f}, {self.target_absolute_position['y']:.2f})")
-            self.logger.info(f"Erro: X={error_x:.2f}m, Y={error_y:.2f}m, Distância={distance_horizontal:.2f}m")
-            self.logger.info(f"Velocidades: Vx={velocity_x:.2f}, Vy={velocity_y:.2f}, Vz={velocity_z:.2f}")
+            # Log detalhado para debug - apenas de vez em quando para não poluir
+            if hasattr(self, '_log_counter'):
+                self._log_counter += 1
+            else:
+                self._log_counter = 0
+                
+            if self._log_counter % 20 == 0:  # A cada 20 iterações (aproximadamente 1 segundo)
+                self.logger.info(f"Pos atual: X={self.current_position['x']:.2f}, Y={self.current_position['y']:.2f}")
+                self.logger.info(f"Alvo: X={self.target_absolute_position['x']:.2f}, Y={self.target_absolute_position['y']:.2f}")
+                self.logger.info(f"Erro: X={error_x:.2f}m, Y={error_y:.2f}m, Dist={distance_horizontal:.2f}m")
+                self.logger.info(f"Vel cmd: Vx={velocity_x:.2f}, Vy={velocity_y:.2f}, Vz={velocity_z:.2f}")
 
             return py_trees.common.Status.RUNNING
 
