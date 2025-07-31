@@ -13,32 +13,37 @@ from drone_behaviors.commander.px4_commander import PX4Commander
 
 
 def build_behavior_tree(commander):
-    root = py_trees.composites.Sequence(name="Missao Precision Landing", memory=True)
+    root = py_trees.composites.Parallel(
+        name="Missao Precision Landing", 
+        policy=py_trees.common.ParallelPolicy.SuccessOnOne()
+    )
     
-    # Criar o nodo de detecção de câmera (achar_local_seguro)
+    # Criar o nodo de detecção de câmera (achar_local_seguro) - roda em paralelo
     camera_detect = achar_local_seguro("Achar Local Seguro", commander)
+    
+    # Sequência principal da missão
+    missao_seq = py_trees.composites.Sequence(name="Sequencia Principal", memory=True)
     
     # 1. Sequência de takeoff (deve completar primeiro)
     takeoff_seq = BehaviorFactory.create_takeoff_sequence(commander, camera_detect)
     
-    # 2. Buscar local seguro (após takeoff completo)
-    buscar_local = camera_detect
-    
-    # 3. Converter posição da imagem para coordenadas NED
+    # 2. Converter posição da imagem para coordenadas NED (aguarda automaticamente a estabilização)
     converter_coord = img2local("Converter Imagem->NED")
     
-    # 4. Aproximar do local e realizar pouso automaticamente
+    # 3. Aproximar do local e realizar pouso automaticamente
     aproximar = aproxima("Aproximar Local Seguro", commander)
     
-    # Nota: O nodo 'aproxima' agora gerencia tanto a aproximação quanto o pouso
-    # Não é mais necessário um nodo separado para landing
-
-    # Adiciona todos os nodos na sequência principal (execução sequencial)
-    root.add_children([
+    # Adiciona todos os nodos na sequência principal
+    missao_seq.add_children([
         takeoff_seq,        # 1º: Takeoff (deve completar antes de prosseguir)
-        buscar_local,       # 2º: Buscar local seguro (5s de estabilização)
-        converter_coord,    # 3º: Converter pixel para coordenadas NED
-        aproximar          # 4º: Aproximar do local e realizar pouso completo
+        converter_coord,    # 2º: Aguarda estabilização e converte coordenadas
+        aproximar          # 3º: Aproximar do local e realizar pouso completo
+    ])
+    
+    # Adiciona tanto o detector de câmera quanto a sequência principal em paralelo
+    root.add_children([
+        camera_detect,      # Roda em paralelo durante toda a missão
+        missao_seq         # Sequência principal da missão
     ])
     
     tree = py_trees.trees.BehaviourTree(root)
