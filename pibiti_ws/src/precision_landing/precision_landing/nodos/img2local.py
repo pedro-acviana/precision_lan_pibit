@@ -16,10 +16,10 @@ class img2local(py_trees.behaviour.Behaviour):
         # self.fy = 1007.783677020086202  # focal length y (pixels)
 
         # Mudar de volta para os valores da raspcam!!!!!!!
-        self.fx = 640
-        self.fy = 718
-        self.cx = 640
-        self.cy = 480
+        self.fx = 540  # focal length x (pixels)
+        self.fy = 627  # focal length y (pixels)
+        self.cx = 640  # Centro X = 1280/2
+        self.cy = 480  # Centro Y = 960/2
 
         # self.cx = 294.9315450028845476  # principal point x
         # self.cy = 233.5219972126571619  # principal point y
