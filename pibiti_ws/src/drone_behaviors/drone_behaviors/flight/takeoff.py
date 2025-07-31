@@ -44,7 +44,7 @@ class Takeoff(py_trees.behaviour.Behaviour):
     def update(self):
         # Timeout de segurança (30 segundos máximo)
         if time.time() - self.start_time > 50.0:
-            self.cmdr.get_logger().warn("Timeout no takeoff - forçando sucesso")
+            self.cmdr.get_logger().warn("Timeout no takeoff - forçando pouso")
             return py_trees.common.Status.FAILURE
         
         # Verifica se temos dados de altitude atual via subscriber
@@ -52,7 +52,7 @@ class Takeoff(py_trees.behaviour.Behaviour):
             self.cmdr.get_logger().info("Aguardando dados de altitude do drone...")
             return py_trees.common.Status.RUNNING
         
-        # Obtém altitude atual (valor absoluto, pois PX4 usa Z negativo)
+        # Obtém altitude atual
         current_altitude = abs(self.current_altitude)
         target_altitude = abs(self.cmdr.target_altitude)
         
@@ -68,7 +68,13 @@ class Takeoff(py_trees.behaviour.Behaviour):
         if altitude_error <= self.altitude_tolerance:
             # Aguarda pelo menos 3 segundos para estabilização mesmo após atingir altitude
             if elapsed_time >= 3.0:
-                self.cmdr.get_logger().info(f"Takeoff concluído! Altitude final: {current_altitude:.2f}m (erro: {altitude_error:.2f}m)")
+                # Marca takeoff como concluído no blackboard
+                blackboard = py_trees.blackboard.Blackboard()
+                blackboard.set("takeoff_completed", True)
+                blackboard.set("current_altitude", current_altitude)
+                
+                self.cmdr.get_logger().info(f"✅ Takeoff concluído! Altitude final: {current_altitude:.2f}m (erro: {altitude_error:.2f}m)")
+                self.cmdr.get_logger().info("Flag 'takeoff_completed' definida no blackboard")
                 return py_trees.common.Status.SUCCESS
         
         return py_trees.common.Status.RUNNING
