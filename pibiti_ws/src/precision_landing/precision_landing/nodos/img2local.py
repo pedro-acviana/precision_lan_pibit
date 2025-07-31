@@ -18,9 +18,9 @@ class img2local(py_trees.behaviour.Behaviour):
         self.cy = 233.5219972126571619  # principal point y
         
         # Dimensões da imagem
-        self.image_width = 640   # Largura da imagem em pixels
-        self.image_height = 480   # Altura da imagem em pixels
-        
+        self.image_width = 1280   # Largura da imagem em pixels
+        self.image_height = 960   # Altura da imagem em pixels
+
         # Matriz de calibração intrínseca K
         self.K = np.array([
             [self.fx, 0,       self.cx],
@@ -73,28 +73,43 @@ class img2local(py_trees.behaviour.Behaviour):
         self.logger.info("Iniciando conversão de coordenadas pixel para coordenadas relativas")
     
     def pixel_to_relative_position(self, u, v, altitude):
-        """Converte coordenadas de pixel para posição relativa ao drone usando matriz de projeção"""
+        """Converte coordenadas de pixel para posição relativa ao drone com câmera apontando para frente"""
         try:
-            # Coordenadas homogêneas do pixel
-            pixel_hom = np.array([u, v, 1])
+            # Para câmera apontando para frente, precisamos calcular onde o raio da câmera intersecta o solo
             
-            # Remove a distorção (normaliza as coordenadas) usando K inversa
-            normalized = np.linalg.inv(self.K) @ pixel_hom
+            # 1. Converte pixel para coordenadas normalizadas da câmera usando parâmetros intrínsecos
+            x_normalized = (u - self.cx) / self.fx  # Coordenada X normalizada
+            y_normalized = (v - self.cy) / self.fy  # Coordenada Y normalizada
             
-            # Calcula a direção no espaço 3D (assumindo Z = 1)
-            direction = normalized / normalized[2] if normalized[2] != 0 else normalized
+            # 2. Para câmera apontando para frente, o horizonte está no meio da imagem (cy)
+            # Pixels abaixo do horizonte (v > cy) podem ser projetados no solo
+            if v <= self.cy:
+                self.logger.warning(f"Pixel ({u}, {v}) está no horizonte ou acima - não pode ser projetado no solo")
+                return np.array([0, 0, 0])
             
-            # Escala pela altitude real (Z = altura do drone)
-            point_3d = direction * altitude
+            # 3. Calcula o ângulo de depressão (abaixo do horizonte)
+            # y_normalized > 0 significa que estamos olhando para baixo em relação ao horizonte
+            angle_depression = math.atan(y_normalized)
             
-            # Ajusta o sistema de coordenadas para câmera apontando para frente:
-            # - Nosso X (frente) é o -Y da câmera (invertido porque Y da imagem cresce para baixo)
-            # - Nosso Y (direita) é o X da câmera  
-            # - Z (para baixo) é o Z da câmera
+            # 4. Calcula o ângulo lateral (direita/esquerda do centro)
+            angle_lateral = math.atan(x_normalized)
+            
+            # 5. Calcula a distância no solo usando trigonometria
+            # altitude / tan(angle_depression) = distância horizontal até o ponto
+            if angle_depression <= 0:
+                self.logger.warning("Ângulo de depressão inválido - pixel não está abaixo do horizonte")
+                return np.array([0, 0, 0])
+                
+            distance_forward = altitude / math.tan(angle_depression)  # Distância para frente
+            distance_lateral = distance_forward * math.tan(angle_lateral)  # Deslocamento lateral
+            
+            # 6. Monta a posição relativa seguindo nossa convenção:
+            # X = movimento longitudinal (frente/trás)
+            # Y = movimento lateral (direita/esquerda)
             relative_position = np.array([
-                -point_3d[1],  # X = frente (negativo do Y da câmera)
-                point_3d[0],   # Y = direita (X da câmera)
-                0              # Z = mantém altitude
+                distance_forward,    # X = longitudinal (+ frente)
+                distance_lateral,    # Y = lateral (+ direita, - esquerda)
+                0                    # Z = mantém altitude
             ])
             
             return relative_position
@@ -107,9 +122,15 @@ class img2local(py_trees.behaviour.Behaviour):
         try:
             blackboard = py_trees.blackboard.Blackboard()
             
+            # Verifica se o local seguro foi determinado após estabilização
             if not blackboard.exists("local_seguro_pixel"):
-                self.logger.error("Posição do local seguro não encontrada no blackboard")
-                return py_trees.common.Status.FAILURE
+                # self.logger.warning("Aguardando local seguro ser determinado pela estabilização...")
+                return py_trees.common.Status.RUNNING
+                
+            # Verifica se há score (indica que a estabilização foi concluída)
+            if not blackboard.exists("local_seguro_score"):
+                self.logger.warning("Aguardando conclusão da fase de estabilização...")
+                return py_trees.common.Status.RUNNING
                 
             pixel_pos = blackboard.get("local_seguro_pixel")
             pixel_x, pixel_y = pixel_pos
@@ -131,14 +152,15 @@ class img2local(py_trees.behaviour.Behaviour):
             relative_pos = self.pixel_to_relative_position(pixel_x, pixel_y, altitude)
             
             relative_target = {
-                'x': relative_pos[0],  # Norte/Sul (frente/trás)
-                'y': relative_pos[1],  # Leste/Oeste (esquerda/direita)
-                'z': 0                 # Altitude
+                'x': relative_pos[0],  # X = Lateral (direita/esquerda)
+                'y': relative_pos[1],  # Y = Longitudinal (frente/trás) 
+                'z': 0                 # Z = Altitude mantida
             }
             
             blackboard.set("target_relative_position", relative_target)
             
-            self.logger.info(f"Conversão: pixel({pixel_x}, {pixel_y}) -> local({relative_target['x']:.2f}, {relative_target['y']:.2f}, 0)")
+            score = blackboard.get("local_seguro_score")
+            self.logger.info(f"Conversão pós-estabilização: pixel({pixel_x}, {pixel_y}) -> local({relative_target['x']:.2f}, {relative_target['y']:.2f}, 0) [score: {score:.2f}]")
             return py_trees.common.Status.SUCCESS
             
         except Exception as e:
