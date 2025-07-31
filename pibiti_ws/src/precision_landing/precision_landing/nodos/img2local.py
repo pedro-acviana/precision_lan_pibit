@@ -12,10 +12,17 @@ class img2local(py_trees.behaviour.Behaviour):
         super().__init__(name)
         
         # Parâmetros intrínsecos da câmera
-        self.fx = 1009.622747206156419  # focal length x (pixels)
-        self.fy = 1007.783677020086202  # focal length y (pixels)
-        self.cx = 294.9315450028845476  # principal point x
-        self.cy = 233.5219972126571619  # principal point y
+        # self.fx = 1009.622747206156419  # focal length x (pixels)
+        # self.fy = 1007.783677020086202  # focal length y (pixels)
+
+        # Mudar de volta para os valores da raspcam!!!!!!!
+        self.fx = 640
+        self.fy = 718
+        self.cx = 640
+        self.cy = 480
+
+        # self.cx = 294.9315450028845476  # principal point x
+        # self.cy = 233.5219972126571619  # principal point y
         
         # Dimensões da imagem
         self.image_width = 1280   # Largura da imagem em pixels
@@ -106,10 +113,13 @@ class img2local(py_trees.behaviour.Behaviour):
             # 6. Monta a posição relativa seguindo nossa convenção:
             # X = movimento longitudinal (frente/trás)
             # Y = movimento lateral (direita/esquerda)
+            # No sistema da imagem: u aumenta da esquerda para direita
+            # No sistema do drone: Y positivo é para a esquerda
+            # Portanto: Y_drone = -distance_lateral (inverte o sinal)
             relative_position = np.array([
-                distance_forward,    # X = longitudinal (+ frente)
-                distance_lateral,    # Y = lateral (+ direita, - esquerda)
-                0                    # Z = mantém altitude
+                distance_forward,     # X = longitudinal (+ frente)
+                -distance_lateral,    # Y = lateral (+ esquerda quando u > cx, - direita quando u < cx)
+                0                     # Z = mantém altitude
             ])
             
             return relative_position
@@ -152,8 +162,8 @@ class img2local(py_trees.behaviour.Behaviour):
             relative_pos = self.pixel_to_relative_position(pixel_x, pixel_y, altitude)
             
             relative_target = {
-                'x': relative_pos[0],  # X = Lateral (direita/esquerda)
-                'y': relative_pos[1],  # Y = Longitudinal (frente/trás) 
+                'x': relative_pos[0],  # X = Longitudinal (frente/trás)
+                'y': relative_pos[1],  # Y = Lateral (esquerda/direita, + esquerda, - direita) 
                 'z': 0                 # Z = Altitude mantida
             }
             
