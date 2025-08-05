@@ -1,3 +1,6 @@
 build/
 install/
 log/
+# Submodules/External repos
+pibiti_ws/src/px4_msgs/
+pibiti_ws/src/px4_ros_com/
