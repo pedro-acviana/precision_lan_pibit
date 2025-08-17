@@ -17,7 +17,7 @@ class achar_local_seguro(py_trees.behaviour.Behaviour):
         super().__init__(name)
         self.commander = commander
         self.cam = None
-        self.camera_topic = "/camera"
+        self.camera_topic = "/world/forest/model/x500_mono_cam_0/link/camera_link/sensor/imager/image"
         self.camera_resolution = (1280, 960) 
         self.camera_pronta = False
         self.running = False
