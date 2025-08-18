@@ -4,25 +4,20 @@ import math
 import pickle
 import os
 from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
-from px4_msgs.msg import VehicleLocalPosition
+from px4_msgs.msg import VehicleLocalPosition, VehicleImuStatus
+from precision_landing.utils.kalman_filter import DepthEstimationKalmanFilter, PositionKalmanFilter, HomographyTracker
+from precision_landing.utils.enhanced_pose_estimation import EnhancedPose2D3D
 
 
 class img2local(py_trees.behaviour.Behaviour):
     def __init__(self, name):
         super().__init__(name)
         
-        # Parâmetros intrínsecos da câmera
-        # self.fx = 1009.622747206156419  # focal length x (pixels)
-        # self.fy = 1007.783677020086202  # focal length y (pixels)
-
-        # Mudar de volta para os valores da raspcam!!!!!!!
+        # Parâmetros intrínsecos da câmera (RaspCam)
         self.fx = 540  # focal length x (pixels)
         self.fy = 627  # focal length y (pixels)
         self.cx = 640  # Centro X = 1280/2
         self.cy = 480  # Centro Y = 960/2
-
-        # self.cx = 294.9315450028845476  # principal point x
-        # self.cy = 233.5219972126571619  # principal point y
         
         # Dimensões da imagem
         self.image_width = 1280   # Largura da imagem em pixels
@@ -35,19 +30,36 @@ class img2local(py_trees.behaviour.Behaviour):
             [0,       0,       1]
         ])
         
-        # Matriz de rotação (assumindo câmera apontando para a frente)
-        # Para câmera apontando para frente: sem rotação (matriz identidade)
-        self.R = np.eye(3)
+        # Inicializa sistemas avançados de pose estimation
+        self.pose_estimator = EnhancedPose2D3D(
+            camera_matrix=self.K,
+            image_size=(self.image_width, self.image_height)
+        )
         
-        # Vetor de translação (sem translação adicional)
-        self.t = np.array([0, 0, 0])
+        # Filtros de Kalman
+        self.depth_filter = DepthEstimationKalmanFilter(
+            initial_depth=5.0,
+            process_noise=0.1,
+            measurement_noise=0.5
+        )
         
-        # Matriz de projeção P = K [R|t]
-        self.P = np.dot(self.K, np.hstack((self.R, self.t.reshape(3,1))))
+        self.position_filter = PositionKalmanFilter(
+            process_noise=0.1,
+            measurement_noise_vision=0.5,
+            measurement_noise_imu=0.2
+        )
+        
+        # Rastreador de homografia
+        self.homography_tracker = HomographyTracker()
         
         # Inicializa variáveis
         self.current_altitude = None
+        self.current_velocity = None
         self.node = None
+        
+        # Histórico para SfM
+        self.feature_history = []
+        self.reference_features_set = False
         
     def setup(self, **kwargs):
         if 'node' not in kwargs:
@@ -63,10 +75,19 @@ class img2local(py_trees.behaviour.Behaviour):
             depth=10
         )
 
+        # Subscriber para posição local
         self.node.create_subscription(
             VehicleLocalPosition,
             '/fmu/out/vehicle_local_position',
             self.local_position_callback,
+            qos_profile
+        )
+        
+        # Subscriber para dados da IMU (velocidade)
+        self.node.create_subscription(
+            VehicleImuStatus,
+            '/fmu/out/vehicle_imu_status',
+            self.imu_callback,
             qos_profile
         )
 
@@ -76,56 +97,96 @@ class img2local(py_trees.behaviour.Behaviour):
         """Callback para atualizar a altitude atual"""
         self.current_altitude = -msg.z  # Inverte Z para ter altitude positiva
         
+        # Atualiza filtro de posição com dados visuais quando disponível
+        if hasattr(self, 'last_visual_position'):
+            self.position_filter.predict()
+            self.position_filter.update_vision(self.last_visual_position)
+    
+    def imu_callback(self, msg):
+        """Callback para dados da IMU"""
+        # Extrai velocidade da IMU se disponível
+        # (Nota: VehicleImuStatus pode não ter velocidade direta)
+        pass
+        
     def initialise(self):
         self.logger.info("Iniciando conversão de coordenadas pixel para coordenadas relativas")
     
-    def pixel_to_relative_position(self, u, v, altitude):
-        """Converte coordenadas de pixel para posição relativa ao drone com câmera apontando para frente"""
+    def enhanced_pixel_to_relative_position(self, u, v, altitude, current_features=None):
+        """
+        Conversão melhorada usando pose estimation e filtros de Kalman
+        """
         try:
-            # Para câmera apontando para frente, precisamos calcular onde o raio da câmera intersecta o solo
+            # Atualiza filtros de Kalman
+            self.depth_filter.predict()
+            self.position_filter.predict()
             
-            # 1. Converte pixel para coordenadas normalizadas da câmera usando parâmetros intrínsecos
-            x_normalized = (u - self.cx) / self.fx  # Coordenada X normalizada
-            y_normalized = (v - self.cy) / self.fy  # Coordenada Y normalizada
-            
-            # 2. Para câmera apontando para frente, o horizonte está no meio da imagem (cy)
-            # Pixels abaixo do horizonte (v > cy) podem ser projetados no solo
-            if v <= self.cy:
-                self.logger.warning(f"Pixel ({u}, {v}) está no horizonte ou acima - não pode ser projetado no solo")
-                return np.array([0, 0, 0])
-            
-            # 3. Calcula o ângulo de depressão (abaixo do horizonte)
-            # y_normalized > 0 significa que estamos olhando para baixo em relação ao horizonte
-            angle_depression = math.atan(y_normalized)
-            
-            # 4. Calcula o ângulo lateral (direita/esquerda do centro)
-            angle_lateral = math.atan(x_normalized)
-            
-            # 5. Calcula a distância no solo usando trigonometria
-            # altitude / tan(angle_depression) = distância horizontal até o ponto
-            if angle_depression <= 0:
-                self.logger.warning("Ângulo de depressão inválido - pixel não está abaixo do horizonte")
-                return np.array([0, 0, 0])
+            # Estima profundidade usando Structure-from-Motion se temos features
+            depth_estimate = None
+            if current_features and len(self.feature_history) > 0:
+                depth_estimate = self.pose_estimator.estimate_depth_from_apparent_size(
+                    current_features, self.feature_history[-1]
+                )
                 
-            distance_forward = altitude / math.tan(angle_depression)  # Distância para frente
-            distance_lateral = distance_forward * math.tan(angle_lateral)  # Deslocamento lateral
+                if depth_estimate:
+                    self.depth_filter.update(depth_estimate)
+                    depth_estimate = self.depth_filter.get_depth_estimate()
             
-            # 6. Monta a posição relativa seguindo nossa convenção:
-            # X = movimento longitudinal (frente/trás)
-            # Y = movimento lateral (direita/esquerda)
-            # No sistema da imagem: u aumenta da esquerda para direita
-            # No sistema do drone: Y positivo é para a esquerda
-            # Portanto: Y_drone = -distance_lateral (inverte o sinal)
-            relative_position = np.array([
-                distance_forward,     # X = longitudinal (+ frente)
-                -distance_lateral,    # Y = lateral (+ esquerda quando u > cx, - direita quando u < cx)
-                0                     # Z = mantém altitude
-            ])
+            # Usa conversão melhorada
+            x, y, z = self.pose_estimator.enhanced_pixel_to_3d(
+                u, v, altitude, depth_estimate, current_features
+            )
             
-            return relative_position
+            # Valida resultado
+            if not self.pose_estimator.validate_3d_coordinates(x, y, z):
+                self.logger.warning("Coordenadas 3D inválidas, usando método tradicional")
+                return self.pixel_to_relative_position_fallback(u, v, altitude)
+            
+            # Atualiza filtro de posição
+            self.position_filter.update_vision([x, y])
+            smoothed_position = self.position_filter.get_position_estimate()
+            
+            # Salva features atuais para próxima iteração
+            if current_features:
+                self.feature_history.append(current_features)
+                if len(self.feature_history) > 5:  # Mantém apenas 5 frames
+                    self.feature_history.pop(0)
+            
+            return np.array([smoothed_position[0], smoothed_position[1], 0])
             
         except Exception as e:
-            self.logger.error(f"Erro no cálculo de posição relativa: {e}")
+            self.logger.error(f"Erro na conversão melhorada: {e}")
+            return self.pixel_to_relative_position_fallback(u, v, altitude)
+    
+    def pixel_to_relative_position_fallback(self, u, v, altitude):
+        """
+        Método de fallback usando a conversão tradicional
+        """
+        try:
+            # Converte pixel para coordenadas normalizadas da câmera
+            x_normalized = (u - self.cx) / self.fx
+            y_normalized = (v - self.cy) / self.fy
+            
+            # Para câmera apontando para frente, verifica se pixel está abaixo do horizonte
+            if v <= self.cy:
+                self.logger.warning(f"Pixel ({u}, {v}) está no horizonte ou acima")
+                return np.array([0, 0, 0])
+            
+            # Calcula ângulos
+            angle_depression = math.atan(y_normalized)
+            angle_lateral = math.atan(x_normalized)
+            
+            if angle_depression <= 0:
+                self.logger.warning("Ângulo de depressão inválido")
+                return np.array([0, 0, 0])
+                
+            # Trigonometria básica
+            distance_forward = altitude / math.tan(angle_depression)
+            distance_lateral = distance_forward * math.tan(angle_lateral)
+            
+            return np.array([distance_forward, -distance_lateral, 0])
+            
+        except Exception as e:
+            self.logger.error(f"Erro no método de fallback: {e}")
             return np.array([0, 0, 0])
     
     def update(self):
@@ -134,7 +195,6 @@ class img2local(py_trees.behaviour.Behaviour):
             
             # Verifica se o local seguro foi determinado após estabilização
             if not blackboard.exists("local_seguro_pixel"):
-                # self.logger.warning("Aguardando local seguro ser determinado pela estabilização...")
                 return py_trees.common.Status.RUNNING
                 
             # Verifica se há score (indica que a estabilização foi concluída)
@@ -158,8 +218,15 @@ class img2local(py_trees.behaviour.Behaviour):
                 self.logger.warning("Altitude muito baixa - usando valor mínimo")
                 altitude = 1.0
             
-            # Usa o método de conversão baseado em matriz de projeção
-            relative_pos = self.pixel_to_relative_position(pixel_x, pixel_y, altitude)
+            # Tenta obter features atuais para SfM
+            current_features = None
+            if blackboard.exists("current_features"):
+                current_features = blackboard.get("current_features")
+            
+            # Usa o método melhorado de conversão
+            relative_pos = self.enhanced_pixel_to_relative_position(
+                pixel_x, pixel_y, altitude, current_features
+            )
             
             relative_target = {
                 'x': relative_pos[0],  # X = Longitudinal (frente/trás)
@@ -167,10 +234,23 @@ class img2local(py_trees.behaviour.Behaviour):
                 'z': 0                 # Z = Altitude mantida
             }
             
+            # Salva no blackboard
             blackboard.set("target_relative_position", relative_target)
             
+            # Salva última posição visual para o filtro
+            self.last_visual_position = [relative_target['x'], relative_target['y']]
+            
+            # Obtém estimativas dos filtros para logging
+            depth_estimate = self.depth_filter.get_depth_estimate()
+            depth_uncertainty = self.depth_filter.get_depth_uncertainty()
+            position_estimate = self.position_filter.get_position_estimate()
+            velocity_estimate = self.position_filter.get_velocity_estimate()
+            
             score = blackboard.get("local_seguro_score")
-            self.logger.info(f"Conversão pós-estabilização: pixel({pixel_x}, {pixel_y}) -> local({relative_target['x']:.2f}, {relative_target['y']:.2f}, 0) [score: {score:.2f}]")
+            self.logger.info(f"Conversão melhorada: pixel({pixel_x}, {pixel_y}) -> local({relative_target['x']:.2f}, {relative_target['y']:.2f}, 0)")
+            self.logger.info(f"Profundidade estimada: {depth_estimate:.2f}±{depth_uncertainty:.2f}m")
+            self.logger.info(f"Velocidade estimada: vx={velocity_estimate[0]:.2f}, vy={velocity_estimate[1]:.2f} m/s")
+            
             return py_trees.common.Status.SUCCESS
             
         except Exception as e:
