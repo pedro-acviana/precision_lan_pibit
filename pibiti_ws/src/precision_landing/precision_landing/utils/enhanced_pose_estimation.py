@@ -67,18 +67,24 @@ class EnhancedPose2D3D:
         
         return x_norm, y_norm
     
-    def estimate_depth_from_apparent_size(self, current_features: List, reference_features: List = None) -> float:
+    def estimate_depth_from_apparent_size(self, current_features: List, reference_features: Optional[List] = None) -> Optional[float]:
         """
         Estima profundidade baseada na variação do tamanho aparente das features
         Implementa conceitos de Structure-from-Motion do Capítulo 14
         
         Args:
-            current_features: Features detectadas no frame atual
-            reference_features: Features de referência
+            current_features: Features detectadas no frame atual (ou área do template)
+            reference_features: Features de referência (ou área de referência)
             
         Returns:
             estimated_depth: Profundidade estimada em metros
         """
+        # Caso especial: se features são áreas (números), usa cálculo direto de SfM
+        if (isinstance(current_features, (int, float)) and 
+            isinstance(reference_features, (int, float))):
+            return self._calculate_depth_from_area_ratio(current_features, reference_features)
+        
+        # Caso original: features são listas de pontos
         if reference_features is None or len(current_features) < 4 or len(reference_features) < 4:
             return None
         
@@ -110,7 +116,41 @@ class EnhancedPose2D3D:
             # Usa altitude como estimativa inicial
             estimated_depth = 5.0 * size_ratio  # Default inicial
         
-        return max(0.5, estimated_depth)  # Profundidade mínima
+        return float(max(0.5, estimated_depth))  # Profundidade mínima
+    
+    def _calculate_depth_from_area_ratio(self, current_area: float, reference_area: float) -> Optional[float]:
+        """
+        Calcula profundidade baseada na razão de áreas (SfM real)
+        
+        Lei física: área aparente ∝ 1/distância²
+        Se área atual / área referência = k, então distância atual / distância referência = 1/√k
+        
+        Args:
+            current_area: Área atual do template
+            reference_area: Área de referência do template
+            
+        Returns:
+            estimated_depth: Profundidade estimada
+        """
+        if reference_area <= 0 or current_area <= 0:
+            return None
+        
+        # Calcula razão de áreas
+        area_ratio = current_area / reference_area
+        
+        # Calcula fator de mudança de distância baseado na área
+        # área ∝ 1/distância² → distância ∝ 1/√área
+        distance_change_factor = 1.0 / math.sqrt(area_ratio)
+        
+        # Aplica à profundidade de referência
+        if hasattr(self, 'reference_depth') and self.reference_depth > 0:
+            estimated_depth = self.reference_depth * distance_change_factor
+        else:
+            # Se não há referência, estima baseado em altitude padrão
+            estimated_depth = 5.0 * distance_change_factor
+        
+        # Aplica limites razoáveis
+        return float(max(0.5, min(50.0, estimated_depth)))
     
     def raycast_to_ground_plane(self, u: float, v: float, altitude: float, 
                                camera_tilt_angle: float = 0.0) -> Tuple[float, float, float]:
@@ -197,7 +237,7 @@ class EnhancedPose2D3D:
         return x1, y1, z1
     
     def calculate_homography_depth(self, homography_matrix: np.ndarray, 
-                                 baseline_distance: float = 1.0) -> float:
+                                 baseline_distance: float = 1.0) -> Optional[float]:
         """
         Estima profundidade usando matriz de homografia
         Baseado na decomposição da homografia
@@ -224,7 +264,7 @@ class EnhancedPose2D3D:
                 # A componente Z da translação está relacionada à profundidade
                 if translation[2] != 0:
                     depth = baseline_distance / abs(translation[2])
-                    return max(0.5, depth)
+                    return float(max(0.5, depth))
             
         except Exception:
             pass

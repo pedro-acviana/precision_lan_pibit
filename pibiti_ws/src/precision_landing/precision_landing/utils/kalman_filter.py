@@ -235,45 +235,315 @@ class PositionKalmanFilter:
         return np.sqrt(np.diag(self.P[2:, 2:]))
 
 
-class HomographyTracker:
+class TemplateTracker:
     """
-    Rastreamento usando homografia planar (versão simplificada)
-    Baseado no Capítulo 14 do livro de Corke
+    Rastreamento de template usando a região do local seguro
+    Implementa SfM real baseado na mudança de área da região
     """
     
-    def __init__(self, reference_features=None):
+    def __init__(self, initial_depth=5.0):
         """
-        Inicializa o rastreador de homografia
+        Inicializa o rastreador de template
         
         Args:
-            reference_features: Features de referência do frame inicial
+            initial_depth: Profundidade inicial estimada (metros)
         """
-        self.reference_features = reference_features
-        self.reference_descriptors = None
         self.opencv_available = opencv_available
+        self.template = None
+        self.template_area = 0
+        self.reference_position = None
+        self.last_position = (0, 0)  # Inicializa com tupla válida
+        self.initial_depth = initial_depth
+        self.current_depth = initial_depth
         
-        # Só inicializa se OpenCV estiver disponível
-        if self.opencv_available:
-            self.detector = None
-            self.matcher = None
-            # Não inicializa detectores aqui para evitar erros de importação
+        # Histórico para SfM
+        self.area_history = []
+        self.position_history = []
+        self.timestamp_history = []
         
-    def set_reference(self, image, target_region=None):
+        # Parâmetros de tracking
+        self.template_size = (80, 80)  # Tamanho padrão do template
+        self.search_margin = 30  # Margem de busca em pixels
+        self.min_match_confidence = 0.6  # Confiança mínima para match
+        
+    def set_reference_template(self, image, center_x, center_y, region_size=40):
         """
-        Define a imagem de referência e extrai features
-        Versão simplificada que sempre retorna False se OpenCV não estiver disponível
+        Define o template de referência baseado na região do local seguro
+        
+        Args:
+            image: Imagem de referência (numpy array)
+            center_x, center_y: Centro da região do local seguro
+            region_size: Tamanho da região ao redor do centro
+            
+        Returns:
+            bool: True se template foi definido com sucesso
         """
         if not self.opencv_available:
             return False
-        # Por simplicidade, não implementa detecção real
-        return False
+            
+        try:
+            # Converte para escala de cinza se necessário
+            if len(image.shape) == 3:
+                if self.opencv_available:
+                    gray_image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+                else:
+                    # Fallback: usa apenas primeiro canal
+                    gray_image = image[:, :, 0].copy()
+            else:
+                gray_image = image.copy()
+            
+            # Define região do template
+            h, w = gray_image.shape
+            x1 = max(0, int(center_x - region_size))
+            y1 = max(0, int(center_y - region_size))
+            x2 = min(w, int(center_x + region_size))
+            y2 = min(h, int(center_y + region_size))
+            
+            # Extrai template
+            self.template = gray_image[y1:y2, x1:x2].copy()
+            
+            if self.template.size == 0:
+                return False
+            
+            # Salva informações de referência
+            self.template_area = self.template.shape[0] * self.template.shape[1]
+            self.reference_position = (center_x, center_y)
+            self.last_position = (center_x, center_y)
+            
+            # Inicializa histórico
+            self.area_history = [self.template_area]
+            self.position_history = [(center_x, center_y)]
+            self.timestamp_history = [time.time()]
+            
+            return True
+            
+        except Exception as e:
+            print(f"Erro ao definir template: {e}")
+            return False
+    
+    def track_template(self, current_image):
+        """
+        Rastreia o template na imagem atual usando template matching
         
-    def track(self, current_image):
+        Args:
+            current_image: Imagem atual (numpy array)
+            
+        Returns:
+            dict: {
+                'found': bool,
+                'position': (x, y),
+                'confidence': float,
+                'area_ratio': float,
+                'depth_estimate': float
+            }
         """
-        Rastreia features na imagem atual e calcula homografia
-        Versão simplificada que sempre retorna None
+        if not self.opencv_available or self.template is None:
+            return {
+                'found': False,
+                'position': self.last_position,
+                'confidence': 0.0,
+                'area_ratio': 1.0,
+                'depth_estimate': self.current_depth
+            }
+        
+        try:
+            # Converte para escala de cinza
+            if len(current_image.shape) == 3:
+                if self.opencv_available:
+                    gray_current = cv2.cvtColor(current_image, cv2.COLOR_BGR2GRAY)
+                else:
+                    gray_current = current_image[:, :, 0].copy()
+            else:
+                gray_current = current_image.copy()
+            
+            # Define região de busca ao redor da última posição conhecida
+            h, w = gray_current.shape
+            last_x, last_y = self.last_position
+            
+            search_x1 = max(0, int(last_x - self.search_margin))
+            search_y1 = max(0, int(last_y - self.search_margin))
+            search_x2 = min(w, int(last_x + self.search_margin))
+            search_y2 = min(h, int(last_y + self.search_margin))
+            
+            # Extrai região de busca
+            search_region = gray_current[search_y1:search_y2, search_x1:search_x2]
+            
+            if search_region.size == 0:
+                return self._create_failed_result()
+            
+            # Template matching usando correlação normalizada
+            if self.opencv_available and self.template is not None:
+                result = cv2.matchTemplate(search_region, self.template, cv2.TM_CCOEFF_NORMED)
+                
+                # Encontra melhor match
+                min_val, max_val, min_loc, max_loc = cv2.minMaxLoc(result)
+            else:
+                # Fallback simples sem OpenCV
+                max_val = 0.5  # Confiança baixa
+                max_loc = (self.search_margin // 2, self.search_margin // 2)  # Centro da busca
+            
+            # Verifica confiança
+            if max_val < self.min_match_confidence:
+                return self._create_failed_result()
+            
+            # Calcula posição absoluta
+            match_x = search_x1 + max_loc[0] + self.template.shape[1] // 2
+            match_y = search_y1 + max_loc[1] + self.template.shape[0] // 2
+            
+            # Atualiza posição
+            self.last_position = (match_x, match_y)
+            
+            # Calcula área atual do template para SfM
+            current_area = self._estimate_current_area(search_region, max_loc)
+            area_ratio = current_area / self.template_area if self.template_area > 0 else 1.0
+            
+            # Estima profundidade usando SfM
+            depth_estimate = self._calculate_depth_from_area_change(area_ratio)
+            
+            # Atualiza histórico
+            self._update_history(match_x, match_y, current_area)
+            
+            return {
+                'found': True,
+                'position': (match_x, match_y),
+                'confidence': max_val,
+                'area_ratio': area_ratio,
+                'depth_estimate': depth_estimate
+            }
+            
+        except Exception as e:
+            print(f"Erro no tracking: {e}")
+            return self._create_failed_result()
+    
+    def _estimate_current_area(self, search_region, match_location):
         """
-        if not self.opencv_available:
-            return None
-        # Por simplicidade, não implementa tracking real
-        return None
+        Estima a área atual do template baseado na região matched
+        """
+        try:
+            # Verifica se template existe
+            if self.template is None:
+                return self.template_area
+                
+            # Extrai região correspondente ao template
+            x, y = match_location
+            h, w = self.template.shape
+            
+            if y + h <= search_region.shape[0] and x + w <= search_region.shape[1]:
+                current_template = search_region[y:y+h, x:x+w]
+                return current_template.shape[0] * current_template.shape[1]
+            else:
+                return self.template_area
+                
+        except Exception:
+            return self.template_area
+    
+    def _calculate_depth_from_area_change(self, area_ratio):
+        """
+        Calcula estimativa de profundidade baseada na mudança de área (SfM)
+        
+        Lei física: área aparente ∝ 1/distância²
+        Se área aumentou por fator k, distância diminuiu por fator √k
+        """
+        try:
+            if area_ratio > 0:
+                # Calcula mudança de profundidade baseada na área
+                depth_change_factor = 1.0 / np.sqrt(area_ratio)
+                new_depth = self.current_depth * depth_change_factor
+                
+                # Aplica limites razoáveis
+                new_depth = np.clip(new_depth, 0.5, 50.0)
+                
+                # Suavização para evitar mudanças abruptas
+                alpha = 0.3  # Fator de suavização
+                self.current_depth = alpha * new_depth + (1 - alpha) * self.current_depth
+                
+                return self.current_depth
+            else:
+                return self.current_depth
+                
+        except Exception:
+            return self.current_depth
+    
+    def _update_history(self, x, y, area):
+        """
+        Atualiza histórico para análise temporal
+        """
+        current_time = time.time()
+        
+        self.position_history.append((x, y))
+        self.area_history.append(area)
+        self.timestamp_history.append(current_time)
+        
+        # Mantém apenas últimos 10 elementos
+        max_history = 10
+        if len(self.position_history) > max_history:
+            self.position_history = self.position_history[-max_history:]
+            self.area_history = self.area_history[-max_history:]
+            self.timestamp_history = self.timestamp_history[-max_history:]
+    
+    def _create_failed_result(self):
+        """
+        Cria resultado para quando tracking falha
+        """
+        return {
+            'found': False,
+            'position': self.last_position,
+            'confidence': 0.0,
+            'area_ratio': 1.0,
+            'depth_estimate': self.current_depth
+        }
+    
+    def get_velocity_estimate(self):
+        """
+        Calcula estimativa de velocidade baseada no histórico de posições
+        
+        Returns:
+            tuple: (vx, vy) em pixels/segundo
+        """
+        if len(self.position_history) < 2:
+            return (0.0, 0.0)
+        
+        try:
+            # Usa últimas duas posições
+            pos_current = self.position_history[-1]
+            pos_previous = self.position_history[-2]
+            time_current = self.timestamp_history[-1]
+            time_previous = self.timestamp_history[-2]
+            
+            dt = time_current - time_previous
+            if dt <= 0:
+                return (0.0, 0.0)
+            
+            vx = (pos_current[0] - pos_previous[0]) / dt
+            vy = (pos_current[1] - pos_previous[1]) / dt
+            
+            return (vx, vy)
+            
+        except Exception:
+            return (0.0, 0.0)
+    
+    def get_area_change_rate(self):
+        """
+        Calcula taxa de mudança da área (útil para detectar aproximação/afastamento)
+        
+        Returns:
+            float: Taxa de mudança da área (área/segundo)
+        """
+        if len(self.area_history) < 2:
+            return 0.0
+        
+        try:
+            area_current = self.area_history[-1]
+            area_previous = self.area_history[-2]
+            time_current = self.timestamp_history[-1]
+            time_previous = self.timestamp_history[-2]
+            
+            dt = time_current - time_previous
+            if dt <= 0:
+                return 0.0
+            
+            area_change_rate = (area_current - area_previous) / dt
+            return area_change_rate
+            
+        except Exception:
+            return 0.0

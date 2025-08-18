@@ -5,7 +5,7 @@ import pickle
 import os
 from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
 from px4_msgs.msg import VehicleLocalPosition, VehicleImuStatus
-from precision_landing.utils.kalman_filter import DepthEstimationKalmanFilter, PositionKalmanFilter, HomographyTracker
+from precision_landing.utils.kalman_filter import DepthEstimationKalmanFilter, PositionKalmanFilter, TemplateTracker
 from precision_landing.utils.enhanced_pose_estimation import EnhancedPose2D3D
 
 
@@ -50,7 +50,7 @@ class img2local(py_trees.behaviour.Behaviour):
         )
         
         # Rastreador de homografia
-        self.homography_tracker = HomographyTracker()
+        self.template_tracker = TemplateTracker()
         
         # Inicializa variáveis
         self.current_altitude = None
