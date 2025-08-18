@@ -260,7 +260,9 @@ class aproxima(py_trees.behaviour.Behaviour):
                     self.logger.warning("Alvo alcançado! Iniciando fase de pouso preciso!")
                 
                 # Durante o pouso: mantém controle horizontal PI, mas desce com velocidade constante
-                velocity_xy = self.controller_x.compute(error_vector[:2], dt)
+                velocity_x = self.controller_x.compute(np.array([error_x]), dt)[0]
+                velocity_y = self.controller_y.compute(np.array([error_y]), dt)[0]
+                velocity_xy = np.array([velocity_x, velocity_y])
                 velocity_z = self.landing_velocity  # Velocidade constante de descida
                 
                 # Verifica se pousou
@@ -270,14 +272,11 @@ class aproxima(py_trees.behaviour.Behaviour):
                     return py_trees.common.Status.SUCCESS
             else:
                 # Durante aproximação: controle PI completo
-                velocity_xyz = np.array([
-                    self.controller_x.compute(np.array([error_x]), dt)[0],
-                    self.controller_y.compute(np.array([error_y]), dt)[0],
-                    self.controller_z.compute(np.array([error_z]), dt)[0]
-                ])
+                velocity_x = self.controller_x.compute(np.array([error_x]), dt)[0]
+                velocity_y = self.controller_y.compute(np.array([error_y]), dt)[0]
+                velocity_z = self.controller_z.compute(np.array([error_z]), dt)[0]
                 
-                velocity_xy = velocity_xyz[:2]
-                velocity_z = velocity_xyz[2]
+                velocity_xy = np.array([velocity_x, velocity_y])
 
             # Aplica limitação de velocidade adaptativa
             adaptive_speed = self.calculate_adaptive_velocity(
