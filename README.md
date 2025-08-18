@@ -79,6 +79,7 @@ precision_lan_pibit/
 ### **Algoritmos Avançados Implementados**
 - **Filtros de Kalman** - Fusão de dados visuais e IMU para estimativas precisas
 - **Structure-from-Motion (SfM)** - Estimativa de profundidade por variação de features
+- **Template Matching** - Rastreamento robusto usando correlação normalizada
 - **Pose Estimation (PnP)** - Conversão precisa 2D para 3D baseada em Corke
 - **Controladores PI** - Eliminação de erro em estado estacionário
 - **Homografia Planar** - Rastreamento de features entre frames
@@ -120,10 +121,21 @@ precision_lan_pibit/
 - [x] **DepthEstimationKalmanFilter**: Estimativa de profundidade do alvo
 - [x] **PositionKalmanFilter**: Fusão de dados visuais + IMU
 - [x] **HomographyTracker**: Rastreamento de features entre frames
+- [x] **TemplateTracker**: Template matching com SfM real
 - [x] Redução de ruído em medições visuais
 - [x] Estimativas suaves de posição e velocidade
 - [x] Fusão robusta de múltiplas fontes de dados
 - [x] Compatibilidade condicional com OpenCV
+
+### ✅ **Template Matching + Structure-from-Motion** 🆕
+- [x] **Tracking de Local Seguro**: Usa região detectada como template
+- [x] **Correlação Normalizada**: Template matching robusto com OpenCV
+- [x] **SfM Real**: Estimativa de profundidade por mudança de área
+- [x] **Lei Física**: área aparente ∝ 1/distância²
+- [x] **Histórico Temporal**: Análise de múltiplos frames consecutivos
+- [x] **Estimativa de Velocidade**: Velocidade em pixels/s do alvo
+- [x] **Detecção de Aproximação**: Taxa de mudança da área do template
+- [x] **Fallback Inteligente**: Funciona sem OpenCV com estimativas básicas
 
 ### ✅ **Arquitetura de Controle**
 - [x] Árvores de comportamento (Behavior Trees) com execução paralela
@@ -174,6 +186,18 @@ precision_lan_pibit/
 - **Ganhos Separados**: Controladores independentes para X, Y e Z
 - **Velocidade Adaptativa**: Considera altitude, distância e velocidade atual
 
+#### **Template Matching + SfM Avançado** 🆕
+- **TemplateTracker**: Rastreamento da região do local seguro entre frames
+  - Template baseado na área de menor densidade de features
+  - Correlação normalizada com busca inteligente
+  - Histórico temporal para análise de múltiplos frames
+- **Structure-from-Motion Real**: Estimativa de profundidade pela lei física
+  - Lei: área_aparente ∝ 1/distância²
+  - Se área aumenta por fator k → distância diminui por √k
+  - Suavização temporal para evitar mudanças abruptas
+- **Métricas Avançadas**: Velocidade do alvo e taxa de aproximação
+- **Integração Kalman**: Fusão com filtros existentes para robustez
+
 #### **Processamento Paralelo**
 - **Thread principal**: Árvore de comportamento e controle de missão
 - **Thread de câmera**: Captura e análise contínua de imagem
@@ -190,7 +214,124 @@ precision_lan_pibit/
 - **Validação de horizonte**: Apenas pixels abaixo do horizonte são válidos
 - **Homografia Planar**: Rastreamento de movimento entre frames
 
-### **Pré-requisitos**
+### **🎯 Como Usar o Template Matching + SfM**
+
+#### **1. Configuração Básica**
+```python
+from precision_landing.utils.kalman_filter import TemplateTracker
+
+# Inicializar tracker
+tracker = TemplateTracker(initial_depth=5.0)
+```
+
+#### **2. Definir Template (no achar_local_seguro)**
+```python
+# Quando local seguro é detectado
+def analisar_local_seguro(self, image):
+    # ... código existente de detecção ...
+    
+    # Usar região detectada como template
+    if self.local_fixado:
+        center_x, center_y = self.local_fixado
+        
+        # Define template baseado na região do local seguro
+        success = tracker.set_reference_template(
+            image, center_x, center_y, region_size=40
+        )
+        
+        if success:
+            blackboard.set("template_initialized", True)
+            blackboard.set("tracker", tracker)
+```
+
+#### **3. Tracking Entre Frames (no img2local)**
+```python
+# Durante conversão de coordenadas
+def enhanced_pixel_to_relative_position(self, u, v, altitude, tracker=None):
+    if tracker is not None:
+        # Rastreia template na imagem atual
+        track_result = tracker.track_template(current_image)
+        
+        if track_result['found']:
+            # Usa posição atualizada do template
+            u, v = track_result['position']
+            
+            # Usa estimativa de profundidade do SfM
+            depth_estimate = track_result['depth_estimate']
+            
+            # Log de debug
+            print(f"Template tracking: conf={track_result['confidence']:.2f}")
+            print(f"Área mudou: {track_result['area_ratio']:.2f}x")
+            print(f"Profundidade SfM: {depth_estimate:.2f}m")
+```
+
+#### **4. Integração com Kalman**
+```python
+# No DepthEstimationKalmanFilter
+def update_with_template_tracking(self, track_result):
+    if track_result['found'] and track_result['confidence'] > 0.7:
+        # Usa estimativa de profundidade do SfM
+        depth_measurement = track_result['depth_estimate']
+        
+        # Atualiza filtro de Kalman
+        self.update(depth_measurement)
+        
+        # Log filtrado
+        filtered_depth = self.get_depth_estimate()
+        uncertainty = self.get_depth_uncertainty()
+        
+        print(f"Profundidade filtrada: {filtered_depth:.2f}±{uncertainty:.2f}m")
+```
+
+#### **5. Métricas de Performance**
+```python
+# Velocidade do alvo (pixels/s)
+vx, vy = tracker.get_velocity_estimate()
+
+# Taxa de mudança da área (aproximação/afastamento)
+area_rate = tracker.get_area_change_rate()
+
+if area_rate > 0:
+    print("Alvo crescendo - drone se aproximando")
+else:
+    print("Alvo diminuindo - drone se afastando")
+```
+
+#### **6. Fluxo Completo SfM**
+```
+Frame 1: Local seguro detectado
+   ↓
+   Template definido (região 80x80 pixels)
+   ↓
+Frame 2: Template tracking
+   ↓
+   Área mudou de 6400 → 7200 pixels² (1.125x maior)
+   ↓
+   Lei SfM: distância = distância_anterior / √1.125 = distância_anterior / 1.06
+   ↓
+   Se estava a 5m, agora está a ~4.7m
+   ↓
+   Filtro de Kalman suaviza: 4.85m
+   ↓
+   Usa profundidade filtrada para conversão 2D→3D
+```
+
+### **🔧 Vantagens do Template Matching**
+
+1. **Precisão**: Usa exatamente a região que será o local de pouso
+2. **Robustez**: Não depende de features específicas, usa correlação de toda região
+3. **SfM Real**: Estimativa de profundidade fisicamente correta
+4. **Integração**: Funciona com filtros de Kalman existentes
+5. **Fallback**: Continua funcionando mesmo sem OpenCV
+6. **Temporal**: Usa histórico de múltiplos frames para estabilidade
+
+### **⚠️ Considerações Importantes**
+
+- **Resolução**: Template de 80x80 pixels é adequado para alvos de 2-10m
+- **Confiança**: Threshold de 0.6 para correlação normalizada
+- **Busca**: Margem de 30 pixels ao redor da última posição conhecida
+- **Histórico**: Mantém últimos 10 frames para análise temporal
+- **Suavização**: Factor α=0.3 para mudanças graduais de profundidade
 ```bash
 # Ubuntu 22.04 LTS
 # ROS2 Humble
@@ -234,7 +375,8 @@ precision_landing/utils/
 ├── kalman_filter.py                      # Filtros de Kalman completos
 │   ├── DepthEstimationKalmanFilter      # Estimativa de profundidade
 │   ├── PositionKalmanFilter             # Fusão visual + IMU
-│   └── HomographyTracker                # Rastreamento por homografia
+│   ├── HomographyTracker                # Rastreamento por homografia
+│   └── TemplateTracker                  # Template matching + SfM real
 └── enhanced_pose_estimation.py          # Pose estimation avançada
     ├── EnhancedPose2D3D                 # Conversão 2D-3D melhorada
     ├── AdaptiveCameraCalibration        # Calibração adaptativa
@@ -295,6 +437,9 @@ Este projeto avança o estado da arte em:
 11. **Controle PI Hierárquico**: Eliminação de erro em estado estacionário respeitando arquitetura PX4
 12. **Visual Servoing Avançado**: Conversão 2D-3D precisa com validação geométrica
 13. **Compatibilidade Robusta**: Sistema funciona com ou sem OpenCV, com fallbacks inteligentes
+14. **Template Matching Adaptativo**: Rastreamento do local de pouso usando a própria região detectada
+15. **SfM com Lei Física**: Estimativa de profundidade baseada em área aparente ∝ 1/distância²
+16. **Tracking Temporal**: Análise de múltiplos frames para estimativas robustas de velocidade e aproximação
 
 ## 📈 Roadmap de Desenvolvimento
 
