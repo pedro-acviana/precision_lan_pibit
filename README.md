@@ -43,8 +43,11 @@ precision_lan_pibit/
 │   │   ├── precision_landing/    # Pacote principal de pouso de precisão
 │   │   │   ├── nodos/           # Nodos de controle
 │   │   │   │   ├── achar_local_seguro.py    # Detecção de local seguro
-│   │   │   │   ├── img2local.py             # Conversão imagem->coordenadas
-│   │   │   │   └── aproxima.py              # Aproximação controlada
+│   │   │   │   ├── img2local.py             # Conversão imagem->coordenadas (MELHORADO)
+│   │   │   │   └── aproxima.py              # Aproximação controlada (MELHORADO)
+│   │   │   ├── utils/           # Utilitários avançados (NOVO)
+│   │   │   │   ├── kalman_filter.py         # Filtros de Kalman
+│   │   │   │   └── enhanced_pose_estimation.py  # Pose estimation
 │   │   │   ├── sub_arvores/     # Subárvores de comportamento
 │   │   │   └── main.py          # Programa principal
 │   │   └── drone_behaviors/      # Biblioteca de comportamentos
@@ -73,6 +76,14 @@ precision_lan_pibit/
 - **NumPy** - Computação científica e álgebra linear
 - **threading** - Processamento paralelo
 
+### **Algoritmos Avançados Implementados**
+- **Filtros de Kalman** - Fusão de dados visuais e IMU para estimativas precisas
+- **Structure-from-Motion (SfM)** - Estimativa de profundidade por variação de features
+- **Pose Estimation (PnP)** - Conversão precisa 2D para 3D baseada em Corke
+- **Controladores PI** - Eliminação de erro em estado estacionário
+- **Homografia Planar** - Rastreamento de features entre frames
+- **Visual Servoing** - Controle baseado em informações visuais
+
 ### **Comunicação**
 - **DDS/RTPS** - Protocolo de comunicação em tempo real
 - **uXRCE-DDS** - Micro XRCE-DDS para sistemas embarcados
@@ -86,6 +97,10 @@ precision_lan_pibit/
 - [x] Conversão pixel-para-coordenadas com parâmetros intrínsecos de câmera
 - [x] Suporte a câmera frontal com cálculo trigonométrico de projeção
 - [x] Visualização em tempo real com marcações e score de qualidade
+- [x] **NOVO**: Conversão 2D-3D melhorada usando pose estimation (Capítulo 15 - Corke)
+- [x] **NOVO**: Estimativa de profundidade por Structure-from-Motion
+- [x] **NOVO**: Correção de distorção da lente com parâmetros intrínsecos
+- [x] **NOVO**: Validação geométrica de coordenadas 3D
 
 ### ✅ **Controle de Voo**
 - [x] Armamento e desarmamento automático
@@ -95,6 +110,20 @@ precision_lan_pibit/
 - [x] Sincronização de takeoff com flags de blackboard
 - [x] Controle proporcional suavizado para aproximação precisa
 - [x] Sequências de decolagem e pouso com validação de altitude
+- [x] **NOVO**: Controladores PI com eliminação de erro em estado estacionário
+- [x] **NOVO**: Anti-windup para prevenir saturação do erro integral
+- [x] **NOVO**: Velocidade adaptativa baseada em múltiplos fatores
+- [x] **NOVO**: Limitação de aceleração para movimento suave
+- [x] **NOVO**: Fusão com filtros de Kalman para controle preciso
+
+### ✅ **Filtros de Kalman e Fusão de Dados** 🆕
+- [x] **DepthEstimationKalmanFilter**: Estimativa de profundidade do alvo
+- [x] **PositionKalmanFilter**: Fusão de dados visuais + IMU
+- [x] **HomographyTracker**: Rastreamento de features entre frames
+- [x] Redução de ruído em medições visuais
+- [x] Estimativas suaves de posição e velocidade
+- [x] Fusão robusta de múltiplas fontes de dados
+- [x] Compatibilidade condicional com OpenCV
 
 ### ✅ **Arquitetura de Controle**
 - [x] Árvores de comportamento (Behavior Trees) com execução paralela
@@ -103,13 +132,18 @@ precision_lan_pibit/
 - [x] Fases de estabilização antes da conversão de coordenadas
 - [x] Condições de segurança integradas com validação de horizonte
 - [x] Threading daemon para processamento de câmera em background
+- [x] **NOVO**: Fallbacks robustos para compatibilidade
+- [x] **NOVO**: Estrutura modular com utilitários avançados
+- [x] **NOVO**: Logging detalhado com incertezas dos filtros
 
 ### 🔄 **Em Desenvolvimento**
 - [ ] Controle adaptativo para diferentes condições de vento
 - [ ] Estimação de parâmetros em tempo real
-- [ ] Filtros avançados para atenuação de ruído
+- [ ] Filtros avançados para atenuação de ruído *(Parcialmente implementado)*
 - [ ] Algoritmos de pouso em terrenos inclinados
 - [ ] Sistema de recuperação de falhas
+- [ ] Calibração adaptativa de câmera durante o voo
+- [ ] Homografia completa para tracking avançado
 
 ## 🛠️ Instalação e Configuração
 
@@ -119,6 +153,26 @@ precision_lan_pibit/
 - **X**: Movimento longitudinal (frente/trás) 
 - **Y**: Movimento lateral (direita/esquerda)
 - **Mapeamento NED**: Conversão automática para o sistema PX4 (Norte-Leste-Down)
+
+#### **Filtros de Kalman Avançados** 🆕
+- **DepthEstimationKalmanFilter**: Estado [profundidade, velocidade_profundidade]
+  - Estima profundidade usando variação do tamanho das features
+  - Anti-windup para prevenir saturação
+- **PositionKalmanFilter**: Estado [x, y, vx, vy] em coordenadas NED
+  - Fusão de medições visuais (posição) + IMU (velocidade)
+  - Modelo de velocidade constante com ruído de processo
+
+#### **Conversão 2D-3D Melhorada** 🆕
+- **Enhanced Pose Estimation**: Baseado no Capítulo 15 do livro de Corke
+- **Structure-from-Motion**: Estimativa de profundidade por variação de features
+- **Raycast Avançado**: Considera inclinação da câmera e validação geométrica
+- **Correção de Distorção**: Usa parâmetros intrínsecos para precisão
+
+#### **Controladores PI** 🆕
+- **Controle Proporcional-Integral**: Elimina erro em estado estacionário
+- **Anti-windup**: Previne saturação do erro integral
+- **Ganhos Separados**: Controladores independentes para X, Y e Z
+- **Velocidade Adaptativa**: Considera altitude, distância e velocidade atual
 
 #### **Processamento Paralelo**
 - **Thread principal**: Árvore de comportamento e controle de missão
@@ -134,6 +188,7 @@ precision_lan_pibit/
 - **Parâmetros intrínsecos**: Calibração precisa da câmera (fx, fy, cx, cy)
 - **Projeção trigonométrica**: Cálculo de distâncias reais no solo
 - **Validação de horizonte**: Apenas pixels abaixo do horizonte são válidos
+- **Homografia Planar**: Rastreamento de movimento entre frames
 
 ### **Pré-requisitos**
 ```bash
@@ -170,15 +225,47 @@ source install/setup.bash
 ros2 run precision_landing main
 ```
 
+## 🔧 Novos Arquivos Implementados
+
+### **📁 utils/ - Algoritmos Avançados** 🆕
+```
+precision_landing/utils/
+├── __init__.py                           # Inicialização do pacote
+├── kalman_filter.py                      # Filtros de Kalman completos
+│   ├── DepthEstimationKalmanFilter      # Estimativa de profundidade
+│   ├── PositionKalmanFilter             # Fusão visual + IMU
+│   └── HomographyTracker                # Rastreamento por homografia
+└── enhanced_pose_estimation.py          # Pose estimation avançada
+    ├── EnhancedPose2D3D                 # Conversão 2D-3D melhorada
+    ├── AdaptiveCameraCalibration        # Calibração adaptativa
+    └── Structure-from-Motion algorithms  # SfM para profundidade
+```
+
+### **📋 Documentação Criada** 🆕
+```
+precision_lan_pibit/
+├── README_MELHORIAS.md              # Explicação detalhada das melhorias
+├── RESUMO_IMPLEMENTACOES.md         # Status completo das implementações
+└── README.md                        # README principal (atualizado)
+```
+
+### **🔄 Arquivos Modificados (Melhorados)**
+- `nodos/img2local.py` - Integração dos filtros de Kalman e pose estimation
+- `nodos/aproxima.py` - Controladores PI e velocidade adaptativa
+- `nodos/achar_local_seguro.py` - **Preservado intacto** (exibição da câmera)
+- `main.py` - **Preservado intacto** (árvore de comportamento)
+
 ## 📊 Resultados Esperados
 
 ### **Métricas de Performance**
-- **Precisão de pouso**: < 50cm do ponto alvo
+- **Precisão de pouso**: < 50cm do ponto alvo *(melhorada com filtros de Kalman)*
 - **Tempo de estabilização**: 5 segundos (configurável)
-- **Taxa de sucesso**: > 95% em condições normais
+- **Taxa de sucesso**: > 95% em condições normais *(esperada melhoria para 98%)*
 - **Frequência de controle**: 20Hz (tempo real)
 - **Resolução de câmera**: 1280x960 pixels
 - **Sistema de coordenadas**: X=longitudinal, Y=lateral (customizado)
+- **Redução de ruído**: ~60% com filtros de Kalman (estimativa)
+- **Eliminação de erro steady-state**: Controladores PI
 
 ### **Condições de Teste**
 - Terrenos planos e inclinados
@@ -200,6 +287,15 @@ Este projeto avança o estado da arte em:
 6. **Sincronização Temporal**: Coordenação precisa entre processamento de visão e controle
 7. **Estabilização Inteligente**: Período de análise antes da tomada de decisão de pouso
 
+### 🆕 **Novas Contribuições Implementadas**
+
+8. **Fusão de Sensores Avançada**: Filtros de Kalman para combinar dados visuais e IMU
+9. **Pose Estimation Robusta**: Implementação baseada nos conceitos do livro "Robotics, Vision and Control" de Peter Corke
+10. **Structure-from-Motion Aplicado**: Estimativa de profundidade usando variação temporal de features
+11. **Controle PI Hierárquico**: Eliminação de erro em estado estacionário respeitando arquitetura PX4
+12. **Visual Servoing Avançado**: Conversão 2D-3D precisa com validação geométrica
+13. **Compatibilidade Robusta**: Sistema funciona com ou sem OpenCV, com fallbacks inteligentes
+
 ## 📈 Roadmap de Desenvolvimento
 
 ### **Fase 1: Fundamentos** ✅
@@ -215,10 +311,15 @@ Este projeto avança o estado da arte em:
 - [x] Execução paralela de detecção durante missão completa
 - [x] Sincronização entre nodos via blackboard
 
-### **Fase 3: Controle Avançado** 🔄
-- [ ] Implementação de filtros adaptativos
+### **Fase 3: Controle Avançado** ✅🔄
+- [x] **Filtros de Kalman**: Implementação completa para fusão de dados
+- [x] **Controladores PI**: Eliminação de erro em estado estacionário
+- [x] **Pose Estimation**: Conversão 2D-3D baseada em Corke (Capítulos 14-15)
+- [x] **Structure-from-Motion**: Estimativa de profundidade por variação de features
+- [x] **Visual Servoing**: Controle baseado em informação visual avançada
 - [ ] Estimação de parâmetros em tempo real
-- [ ] Controle robusto contra distúrbios
+- [ ] Controle robusto contra distúrbios específicos
+- [ ] Calibração adaptativa durante o voo
 
 ### **Fase 4: Validação** 📋
 - [ ] Testes extensivos em simulação
@@ -231,6 +332,19 @@ Este projeto avança o estado da arte em:
 - [**Guia de Desenvolvimento**](docs/DEVELOPMENT.md)
 - [**API Reference**](docs/API.md)
 - [**Resultados Experimentais**](docs/RESULTS.md)
+- [**🆕 Melhorias Implementadas**](README_MELHORIAS.md)
+- [**🆕 Resumo das Implementações**](RESUMO_IMPLEMENTACOES.md)
+
+### 📖 **Base Teórica**
+
+As implementações seguem os conceitos fundamentais do livro:
+**"Robotics, Vision and Control: Fundamental Algorithms in Python"** por Peter Corke
+
+- **Capítulo 3**: Filtros de Kalman e fusão de sensores
+- **Capítulo 4**: Sistemas de controle robótico (PI/PID)
+- **Capítulo 14**: Structure-from-Motion e Homografia
+- **Capítulo 15**: Pose Estimation e Perspective-n-Point (PnP)
+- **Apêndice H**: Implementação prática de filtros
 
 ## 🤝 Colaboração e Suporte
 
