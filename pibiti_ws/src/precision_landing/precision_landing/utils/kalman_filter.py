@@ -1,6 +1,5 @@
 """
 Filtro de Kalman para fusão de dados visuais e estimativa de profundidade
-Baseado nos conceitos do Capítulo 3 e Apêndice H do livro de Corke
 """
 
 import numpy as np
