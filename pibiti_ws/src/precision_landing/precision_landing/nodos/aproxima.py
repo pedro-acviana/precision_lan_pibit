@@ -237,10 +237,9 @@ class aproxima(py_trees.behaviour.Behaviour):
                 dt = current_time - self.last_control_time
             self.last_control_time = current_time
 
-            # Calcula erros
+            # Calcula erros horizontais
             error_x = self.target_absolute_position['x'] - self.current_position['x'] 
             error_y = self.target_absolute_position['y'] - self.current_position['y']
-            error_z = self.takeoff_altitude - self.current_position['z']  # Erro de altitude
             distance_horizontal = math.sqrt(error_x**2 + error_y**2)
             
             # Obtém estimativas do filtro de Kalman
@@ -250,19 +249,19 @@ class aproxima(py_trees.behaviour.Behaviour):
             # Calcula altitude atual para condições
             current_altitude = abs(self.current_position['z'])
             
-            # Usa controladores PI para cada eixo
-            error_vector = np.array([error_x, error_y, error_z])
-            
             # Durante aproximação vs. durante pouso
             if distance_horizontal < self.tolerance:
                 if not self.landing_phase:
                     self.landing_phase = True
                     self.logger.warning("Alvo alcançado! Iniciando fase de pouso preciso!")
                 
-                # Durante o pouso: mantém controle horizontal PI, mas desce com velocidade constante
+                # Durante o pouso: controle horizontal PI + descida suave para altitude zero
                 velocity_x = self.controller_x.compute(np.array([error_x]), dt)[0]
                 velocity_y = self.controller_y.compute(np.array([error_y]), dt)[0]
                 velocity_xy = np.array([velocity_x, velocity_y])
+                
+                # Para pouso: erro Z é sempre a altitude atual (queremos chegar a zero)
+                error_z = 0.0 - self.current_position['z']  # Alvo é altitude zero
                 velocity_z = self.landing_velocity  # Velocidade constante de descida
                 
                 # Verifica se pousou
@@ -271,7 +270,8 @@ class aproxima(py_trees.behaviour.Behaviour):
                     self.commander.publish_velocity_setpoint(0.0, 0.0, 0.0)
                     return py_trees.common.Status.SUCCESS
             else:
-                # Durante aproximação: controle PI completo
+                # Durante aproximação: controle PI completo para manter altitude de takeoff
+                error_z = self.takeoff_altitude - self.current_position['z']  # Mantém altitude de takeoff
                 velocity_x = self.controller_x.compute(np.array([error_x]), dt)[0]
                 velocity_y = self.controller_y.compute(np.array([error_y]), dt)[0]
                 velocity_z = self.controller_z.compute(np.array([error_z]), dt)[0]
@@ -309,11 +309,12 @@ class aproxima(py_trees.behaviour.Behaviour):
                 self._log_counter = 0
                 
             if self._log_counter % 20 == 0:  # A cada 20 iterações
-                self.logger.info(f"Pos atual: X={self.current_position['x']:.2f}, Y={self.current_position['y']:.2f}, Z={self.current_position['z']:.2f}")
-                self.logger.info(f"Alvo: X={self.target_absolute_position['x']:.2f}, Y={self.target_absolute_position['y']:.2f}")
-                self.logger.info(f"Erro: X={error_x:.2f}m, Y={error_y:.2f}m, Z={error_z:.2f}m, Dist={distance_horizontal:.2f}m")
-                self.logger.info(f"Vel estimada KF: vx={velocity_estimate[0]:.2f}, vy={velocity_estimate[1]:.2f} m/s")
-                self.logger.info(f"Vel cmd: Vx={velocity_x:.2f}, Vy={velocity_y:.2f}, Vz={velocity_z:.2f}")
+                phase_str = "POUSO" if self.landing_phase else "APROXIMAÇÃO"
+                self.logger.info(f"[{phase_str}] Pos atual: X={self.current_position['x']:.2f}, Y={self.current_position['y']:.2f}, Z={self.current_position['z']:.2f}")
+                self.logger.info(f"[{phase_str}] Alvo: X={self.target_absolute_position['x']:.2f}, Y={self.target_absolute_position['y']:.2f}")
+                self.logger.info(f"[{phase_str}] Erro: X={error_x:.2f}m, Y={error_y:.2f}m, Z={error_z:.2f}m, Dist={distance_horizontal:.2f}m")
+                self.logger.info(f"[{phase_str}] Vel estimada KF: vx={velocity_estimate[0]:.2f}, vy={velocity_estimate[1]:.2f} m/s")
+                self.logger.info(f"[{phase_str}] Vel cmd: Vx={velocity_x:.2f}, Vy={velocity_y:.2f}, Vz={velocity_z:.2f}")
 
             return py_trees.common.Status.RUNNING
 
