@@ -298,38 +298,3 @@ class EnhancedPose2D3D:
             return False
         
         return True
-
-
-class AdaptiveCameraCalibration:
-    """
-    Calibração adaptativa da câmera baseada em features do ambiente
-    Melhora os parâmetros intrínsecos durante o voo
-    """
-    
-    def __init__(self, initial_camera_matrix, image_size):
-        """
-        Inicializa a calibração adaptativa
-        """
-        self.K = initial_camera_matrix.copy()
-        self.image_size = image_size
-        
-        # Histórico de calibrações
-        self.calibration_history = []
-        
-    def refine_calibration(self, image_points, world_points=None):
-        """
-        Refina a calibração usando pontos detectados
-        
-        Args:
-            image_points: Pontos na imagem
-            world_points: Pontos correspondentes no mundo (se conhecidos)
-        """
-        # Implementação de refinamento adaptativo
-        # Por enquanto, mantém os parâmetros originais
-        pass
-    
-    def get_current_camera_matrix(self):
-        """
-        Retorna a matriz de câmera atual (possivelmente refinada)
-        """
-        return self.K
