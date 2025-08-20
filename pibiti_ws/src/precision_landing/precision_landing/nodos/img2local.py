@@ -100,7 +100,7 @@ class img2local(py_trees.behaviour.Behaviour):
         # Atualiza filtro de posição com dados visuais quando disponível
         if hasattr(self, 'last_visual_position'):
             self.position_filter.predict()
-            self.position_filter.update_vision(self.last_visual_position)
+            self.position_filter.update_position(self.last_visual_position)
     
     def imu_callback(self, msg):
         """Callback para dados da IMU"""
@@ -113,12 +113,40 @@ class img2local(py_trees.behaviour.Behaviour):
     
     def enhanced_pixel_to_relative_position(self, u, v, altitude, current_features=None):
         """
-        Conversão melhorada usando pose estimation e filtros de Kalman
+        Conversão melhorada usando pose estimation e filtros de Kalman com TODAS as velocidades
         """
         try:
             # Atualiza filtros de Kalman
             self.depth_filter.predict()
             self.position_filter.predict()
+            
+            # === USAR VELOCIDADES DO TEMPLATE TRACKER ===
+            template_velocity = None
+            area_change_rate = None
+            if self.template_tracker.template is not None:
+                # Obtém velocidades do template (pixels/segundo)
+                template_velocity = self.template_tracker.get_velocity_estimate()
+                area_change_rate = self.template_tracker.get_area_change_rate()
+                
+                # Log das velocidades do template
+                if template_velocity != (0.0, 0.0):
+                    self.logger.info(f"Template velocity: vx={template_velocity[0]:.2f}, vy={template_velocity[1]:.2f} px/s")
+                
+                # Detecção de comportamento de zoom
+                if area_change_rate > 100:
+                    self.logger.info("Drone se aproximando rapidamente (área aumentando)")
+                elif area_change_rate < -100:
+                    self.logger.info("Drone se afastando (área diminuindo)")
+            
+            # === COMPENSAÇÃO DE MOVIMENTO DE CÂMERA ===
+            u_compensated, v_compensated = u, v
+            if template_velocity and template_velocity != (0.0, 0.0):
+                # Compensa movimento aparente do template
+                compensation_factor = 0.1  # Fator de compensação
+                u_compensated = u - template_velocity[0] * compensation_factor
+                v_compensated = v - template_velocity[1] * compensation_factor
+                
+                self.logger.debug(f"Compensação aplicada: du={-template_velocity[0] * compensation_factor:.2f}, dv={-template_velocity[1] * compensation_factor:.2f}")
             
             # Estima profundidade usando Structure-from-Motion se temos features
             depth_estimate = None
@@ -130,10 +158,20 @@ class img2local(py_trees.behaviour.Behaviour):
                 if depth_estimate:
                     self.depth_filter.update(depth_estimate)
                     depth_estimate = self.depth_filter.get_depth_estimate()
+                    
+                    # === USAR VELOCIDADE DE PROFUNDIDADE ===
+                    depth_velocity = self.depth_filter.state[1]  # Velocidade de profundidade
+                    if abs(depth_velocity) > 0.1:
+                        self.logger.info(f"Velocidade de profundidade: {depth_velocity:.2f} m/s")
+                        
+                        # Predição de profundidade futura
+                        prediction_time = 0.5  # 500ms no futuro
+                        predicted_depth = depth_estimate + depth_velocity * prediction_time
+                        self.logger.info(f"Profundidade predita (500ms): {predicted_depth:.2f}m")
             
-            # Usa conversão melhorada
+            # Usa conversão melhorada com coordenadas compensadas
             x, y, z = self.pose_estimator.enhanced_pixel_to_3d(
-                u, v, altitude, depth_estimate, current_features
+                u_compensated, v_compensated, altitude, depth_estimate, current_features
             )
             
             # Valida resultado
@@ -142,8 +180,33 @@ class img2local(py_trees.behaviour.Behaviour):
                 return self.pixel_to_relative_position_fallback(u, v, altitude)
             
             # Atualiza filtro de posição
-            self.position_filter.update_vision([x, y])
+            self.position_filter.update_position([x, y])
             smoothed_position = self.position_filter.get_position_estimate()
+            
+            # === USAR VELOCIDADE DE POSIÇÃO PARA PREDIÇÃO ===
+            position_velocity = self.position_filter.get_velocity_estimate()
+            if position_velocity is not None and np.linalg.norm(position_velocity) > 0.1:
+                self.logger.info(f"Velocidade de posição: vx={position_velocity[0]:.2f}, vy={position_velocity[1]:.2f} m/s")
+                
+                # Predição de posição futura
+                prediction_time = 0.5
+                predicted_x = smoothed_position[0] + position_velocity[0] * prediction_time
+                predicted_y = smoothed_position[1] + position_velocity[1] * prediction_time
+                
+                self.logger.info(f"Posição predita (500ms): x={predicted_x:.2f}, y={predicted_y:.2f}m")
+                
+                # Salva predição no blackboard para uso pelo aproxima.py
+                blackboard = py_trees.blackboard.Blackboard()
+                blackboard.set("predicted_target_position", {
+                    'x': predicted_x,
+                    'y': predicted_y,
+                    'prediction_time': prediction_time
+                })
+            
+            # === DETECÇÃO DE ESTABILIDADE ===
+            is_target_stable = self._check_target_stability(
+                position_velocity, template_velocity, area_change_rate
+            )
             
             # Salva features atuais para próxima iteração
             if current_features:
@@ -156,6 +219,61 @@ class img2local(py_trees.behaviour.Behaviour):
         except Exception as e:
             self.logger.error(f"Erro na conversão melhorada: {e}")
             return self.pixel_to_relative_position_fallback(u, v, altitude)
+    
+    def _check_target_stability(self, position_velocity, template_velocity, area_change_rate):
+        """
+        Verifica se o alvo está estável baseado em TODAS as velocidades
+        
+        Args:
+            position_velocity: Velocidade de posição do Kalman Filter
+            template_velocity: Velocidade do template tracker
+            area_change_rate: Taxa de mudança da área
+            
+        Returns:
+            bool: True se o alvo está estável
+        """
+        # Limites de estabilidade
+        position_threshold = 0.2  # m/s
+        template_threshold = 5.0  # pixels/s
+        area_threshold = 50.0     # pixels²/s
+        
+        # Verifica velocidade de posição
+        position_stable = True
+        if position_velocity is not None:
+            position_speed = np.linalg.norm(position_velocity)
+            position_stable = position_speed < position_threshold
+        
+        # Verifica velocidade do template
+        template_stable = True
+        if template_velocity and template_velocity != (0.0, 0.0):
+            template_speed = np.sqrt(template_velocity[0]**2 + template_velocity[1]**2)
+            template_stable = template_speed < template_threshold
+        
+        # Verifica mudança de área
+        area_stable = True
+        if area_change_rate is not None:
+            area_stable = abs(area_change_rate) < area_threshold
+        
+        is_stable = position_stable and template_stable and area_stable
+        
+        # Log do status de estabilidade
+        if not is_stable:
+            reasons = []
+            if not position_stable:
+                reasons.append(f"posição instável ({np.linalg.norm(position_velocity):.2f} m/s)")
+            if not template_stable:
+                template_speed = np.sqrt(template_velocity[0]**2 + template_velocity[1]**2)
+                reasons.append(f"template instável ({template_speed:.2f} px/s)")
+            if not area_stable:
+                reasons.append(f"área instável ({area_change_rate:.1f} px²/s)")
+            
+            self.logger.warning(f"Alvo instável: {', '.join(reasons)}")
+        
+        # Salva status no blackboard
+        blackboard = py_trees.blackboard.Blackboard()
+        blackboard.set("target_stable", is_stable)
+        
+        return is_stable
     
     def pixel_to_relative_position_fallback(self, u, v, altitude):
         """
@@ -218,12 +336,45 @@ class img2local(py_trees.behaviour.Behaviour):
                 self.logger.warning("Altitude muito baixa - usando valor mínimo")
                 altitude = 1.0
             
-            # Tenta obter features atuais para SfM
+            # === INTEGRAÇÃO COM TEMPLATE TRACKER ===
+            # Configura template tracker se ainda não foi feito
+            if self.template_tracker.template is None and blackboard.exists("current_image"):
+                current_image = blackboard.get("current_image")
+                success = self.template_tracker.set_reference_template(
+                    current_image, pixel_x, pixel_y, region_size=40
+                )
+                if success:
+                    self.logger.info("Template de referência configurado com sucesso")
+                else:
+                    self.logger.warning("Falha ao configurar template de referência")
+            
+            # Rastreia template na imagem atual para obter velocidades
             current_features = None
-            if blackboard.exists("current_features"):
+            if blackboard.exists("current_image") and self.template_tracker.template is not None:
+                current_image = blackboard.get("current_image")
+                tracking_result = self.template_tracker.track_template(current_image)
+                
+                if tracking_result['found'] and tracking_result['confidence'] > 0.7:
+                    # Usa posição rastreada pelo template (mais precisa)
+                    tracked_x, tracked_y = tracking_result['position']
+                    pixel_x, pixel_y = tracked_x, tracked_y
+                    
+                    # Usa área do template como feature para SfM
+                    current_features = tracking_result['area_ratio']
+                    
+                    self.logger.info(f"Template rastreado: confiança={tracking_result['confidence']:.2f}, "
+                                   f"área_ratio={tracking_result['area_ratio']:.2f}")
+                    
+                    # Salva informações de tracking no blackboard
+                    blackboard.set("template_tracking_result", tracking_result)
+                else:
+                    self.logger.warning("Template tracking falhou - usando posição original")
+            
+            # Tenta obter features atuais para SfM (fallback se template não funcionar)
+            if current_features is None and blackboard.exists("current_features"):
                 current_features = blackboard.get("current_features")
             
-            # Usa o método melhorado de conversão
+            # Usa o método melhorado de conversão com TODAS as velocidades
             relative_pos = self.enhanced_pixel_to_relative_position(
                 pixel_x, pixel_y, altitude, current_features
             )
@@ -240,21 +391,33 @@ class img2local(py_trees.behaviour.Behaviour):
             # Salva última posição visual para o filtro
             self.last_visual_position = [relative_target['x'], relative_target['y']]
             
-            # Obtém estimativas dos filtros para logging
+            # Obtém estimativas dos filtros para logging completo
             depth_estimate = self.depth_filter.get_depth_estimate()
             depth_uncertainty = self.depth_filter.get_depth_uncertainty()
+            depth_velocity = self.depth_filter.state[1]  # Velocidade de profundidade
+            
             position_estimate = self.position_filter.get_position_estimate()
             velocity_estimate = self.position_filter.get_velocity_estimate()
             
+            # Obtém velocidades do template tracker
+            template_velocity = self.template_tracker.get_velocity_estimate()
+            area_change_rate = self.template_tracker.get_area_change_rate()
+            
             score = blackboard.get("local_seguro_score")
-            self.logger.info(f"Conversão melhorada: pixel({pixel_x}, {pixel_y}) -> local({relative_target['x']:.2f}, {relative_target['y']:.2f}, 0)")
-            self.logger.info(f"Profundidade estimada: {depth_estimate:.2f}±{depth_uncertainty:.2f}m")
-            self.logger.info(f"Velocidade estimada: vx={velocity_estimate[0]:.2f}, vy={velocity_estimate[1]:.2f} m/s")
+            
+            # Log completo com TODAS as informações dos filtros
+            self.logger.info(f"=== CONVERSÃO AVANÇADA COM FILTROS DE KALMAN ===")
+            self.logger.info(f"Pixel: ({pixel_x}, {pixel_y}) -> Local: ({relative_target['x']:.2f}, {relative_target['y']:.2f})")
+            self.logger.info(f"Profundidade: {depth_estimate:.2f}±{depth_uncertainty:.2f}m, velocidade: {depth_velocity:.2f}m/s")
+            self.logger.info(f"Posição estimada: ({position_estimate[0]:.2f}, {position_estimate[1]:.2f})m")
+            self.logger.info(f"Velocidade posição: vx={velocity_estimate[0]:.2f}, vy={velocity_estimate[1]:.2f} m/s")
+            self.logger.info(f"Velocidade template: vx={template_velocity[0]:.2f}, vy={template_velocity[1]:.2f} px/s")
+            self.logger.info(f"Taxa mudança área: {area_change_rate:.2f} px²/s")
             
             return py_trees.common.Status.SUCCESS
             
         except Exception as e:
-            self.logger.error(f"Erro na conversão: {e}")
+            self.logger.error(f"Erro na conversão avançada: {e}")
             return py_trees.common.Status.FAILURE
     
     def terminate(self, new_status):
