@@ -164,7 +164,7 @@ class PositionKalmanFilter:
         self.state = self.F @ self.state
         self.P = self.F @ self.P @ self.F.T + self.Q
         
-    def update_vision(self, position_measurement):
+    def update_position(self, position_measurement):
         """
         Atualiza com medição visual da posição
         
