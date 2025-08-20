@@ -7,36 +7,41 @@ from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
 from precision_landing.utils.kalman_filter import PositionKalmanFilter
 
 
-class PIController:
+class PIDController:
     """
-    Controlador Proporcional-Integral para controle de posição
+    Controlador Proporcional-Integral-Derivativo para controle de posição
     Baseado nos conceitos de controle do Capítulo 4 do livro de Corke
+    Integrado com Filtros de Kalman para controle derivativo preciso
     """
     
-    def __init__(self, kp=1.0, ki=0.1, windup_limit=5.0):
+    def __init__(self, kp=1.0, ki=0.1, kd=0.1, windup_limit=5.0):
         """
-        Inicializa o controlador PI
+        Inicializa o controlador PID
         
         Args:
             kp: Ganho proporcional
             ki: Ganho integral
+            kd: Ganho derivativo
             windup_limit: Limite para anti-windup
         """
         self.kp = kp
         self.ki = ki
+        self.kd = kd
         self.windup_limit = windup_limit
         
         # Estado interno
         self.integral_error = np.array([0.0, 0.0, 0.0])
+        self.last_error = np.array([0.0, 0.0, 0.0])
         self.last_time = None
         
-    def compute(self, error, dt):
+    def compute(self, error, dt, kalman_velocity=None):
         """
-        Calcula a saída do controlador PI
+        Calcula a saída do controlador PID usando velocidade do Kalman Filter
         
         Args:
             error: Erro atual [x, y, z]
             dt: Delta de tempo
+            kalman_velocity: Velocidade estimada pelo filtro de Kalman (opcional)
             
         Returns:
             output: Comando de velocidade [vx, vy, vz]
@@ -49,8 +54,29 @@ class PIController:
                                     -self.windup_limit, 
                                     self.windup_limit)
         
-        # Calcula saída PI
-        output = self.kp * error + self.ki * self.integral_error
+        # Termo proporcional
+        proportional_term = self.kp * error
+        
+        # Termo integral
+        integral_term = self.ki * self.integral_error
+        
+        # Termo derivativo: PRIORIZA velocidade do Kalman Filter
+        if kalman_velocity is not None:
+            # Usa velocidade estimada pelo Kalman (mais precisa que diferença numérica)
+            derivative_term = -self.kd * np.array(kalman_velocity[:len(error)])
+        else:
+            # Fallback: derivada numérica do erro
+            if dt > 0:
+                error_derivative = (error - self.last_error) / dt
+                derivative_term = self.kd * error_derivative
+            else:
+                derivative_term = np.zeros_like(error)
+        
+        # Atualiza último erro para próxima iteração
+        self.last_error = error.copy()
+        
+        # Calcula saída PID completa
+        output = proportional_term + integral_term + derivative_term
         
         return output
     
@@ -59,6 +85,7 @@ class PIController:
         Reseta o estado interno do controlador
         """
         self.integral_error = np.array([0.0, 0.0, 0.0])
+        self.last_error = np.array([0.0, 0.0, 0.0])
 
 
 class aproxima(py_trees.behaviour.Behaviour):
@@ -76,10 +103,10 @@ class aproxima(py_trees.behaviour.Behaviour):
         self.target_absolute_position = None  # Posição absoluta do alvo (calculada uma vez)
         self.takeoff_altitude = None  # Altitude de takeoff para manter durante aproximação
         
-        # Controladores PI para cada eixo
-        self.controller_x = PIController(kp=1.2, ki=0.2, windup_limit=3.0)
-        self.controller_y = PIController(kp=1.2, ki=0.2, windup_limit=3.0)
-        self.controller_z = PIController(kp=0.8, ki=0.1, windup_limit=2.0)
+        # Controladores PID para cada eixo com ganhos otimizados
+        self.controller_x = PIDController(kp=1.2, ki=0.2, kd=0.3, windup_limit=3.0)
+        self.controller_y = PIDController(kp=1.2, ki=0.2, kd=0.3, windup_limit=3.0)
+        self.controller_z = PIDController(kp=0.8, ki=0.1, kd=0.2, windup_limit=2.0)
         
         # Filtro de Kalman para estimativa de posição/velocidade
         self.position_filter = PositionKalmanFilter(
@@ -92,6 +119,11 @@ class aproxima(py_trees.behaviour.Behaviour):
         self.last_velocity = np.array([0.0, 0.0, 0.0])
         self.smoothing_factor = 0.3  # Fator de suavização (0-1)
         self.last_control_time = None
+        
+        # Parâmetros de predição
+        self.prediction_horizon = 0.5  # Horizonte de predição em segundos
+        self.enable_prediction = True  # Habilita controle preditivo
+        self.enable_velocity_compensation = True  # Habilita compensação de velocidade
         
         # Subscrições ROS2
         self.position_subscriber = None
@@ -132,7 +164,7 @@ class aproxima(py_trees.behaviour.Behaviour):
         # Atualiza filtro de Kalman com medição de posição
         current_pos = [self.current_position['x'], self.current_position['y']]
         self.position_filter.predict()
-        self.position_filter.update_vision(current_pos)
+        self.position_filter.update_position(current_pos)
     
     def initialise(self):
         """Inicializa a aproximação calculando o alvo absoluto uma vez"""
@@ -186,6 +218,84 @@ class aproxima(py_trees.behaviour.Behaviour):
         self.last_velocity = smoothed
         return smoothed.tolist()
     
+    def predict_future_position(self, current_pos, velocity_estimate, prediction_time=None):
+        """
+        Prediz posição futura baseada na velocidade estimada pelo Kalman Filter
+        
+        Args:
+            current_pos: Posição atual [x, y, z]
+            velocity_estimate: Velocidade estimada pelo filtro [vx, vy]
+            prediction_time: Tempo de predição (padrão: self.prediction_horizon)
+            
+        Returns:
+            dict: Posição predita {'x': px, 'y': py, 'z': pz}
+        """
+        if prediction_time is None:
+            prediction_time = self.prediction_horizon
+            
+        # Predição linear baseada na velocidade do Kalman Filter
+        predicted_x = current_pos['x'] + velocity_estimate[0] * prediction_time
+        predicted_y = current_pos['y'] + velocity_estimate[1] * prediction_time
+        predicted_z = current_pos['z']  # Z se mantém
+        
+        return {
+            'x': predicted_x,
+            'y': predicted_y, 
+            'z': predicted_z
+        }
+    
+    def calculate_predictive_error(self, target_pos, current_pos, velocity_estimate):
+        """
+        Calcula erro considerando predição de movimento
+        
+        Args:
+            target_pos: Posição do alvo
+            current_pos: Posição atual
+            velocity_estimate: Velocidade estimada pelo Kalman Filter
+            
+        Returns:
+            tuple: (erro_x, erro_y, erro_z) compensados por predição
+        """
+        if not self.enable_prediction or velocity_estimate is None:
+            # Erro simples sem predição
+            error_x = target_pos['x'] - current_pos['x']
+            error_y = target_pos['y'] - current_pos['y']
+            error_z = target_pos['z'] - current_pos['z']
+            return error_x, error_y, error_z
+        
+        # Prediz onde o drone estará no próximo ciclo
+        predicted_pos = self.predict_future_position(current_pos, velocity_estimate)
+        
+        # Calcula erro compensando a predição
+        error_x = target_pos['x'] - predicted_pos['x']
+        error_y = target_pos['y'] - predicted_pos['y']  
+        error_z = target_pos['z'] - predicted_pos['z']
+        
+        return error_x, error_y, error_z
+    
+    def calculate_velocity_compensation(self, velocity_estimate, distance_to_target):
+        """
+        Calcula compensação baseada na velocidade atual para controle mais suave
+        
+        Args:
+            velocity_estimate: Velocidade estimada pelo Kalman [vx, vy]
+            distance_to_target: Distância até o alvo
+            
+        Returns:
+            tuple: (comp_x, comp_y) - fatores de compensação
+        """
+        if not self.enable_velocity_compensation or velocity_estimate is None:
+            return 0.0, 0.0
+            
+        # Fator de compensação baseado na distância (mais compensação quando longe)
+        compensation_factor = min(0.3, distance_to_target * 0.1)
+        
+        # Compensação proporcional à velocidade atual
+        comp_x = -compensation_factor * velocity_estimate[0]
+        comp_y = -compensation_factor * velocity_estimate[1]
+        
+        return comp_x, comp_y
+    
     def calculate_adaptive_velocity(self, distance, altitude, current_velocity):
         """
         Calcula velocidade adaptativa baseada na distância, altitude e velocidade atual
@@ -215,7 +325,7 @@ class aproxima(py_trees.behaviour.Behaviour):
         return base_speed
         
     def update(self):
-        """Controle baseado em controladores PI e filtros de Kalman"""
+        """Controle PID completo com predição baseada em filtros de Kalman"""
         try:
             if self.current_position is None:
                 self.logger.warning("Aguardando posição atual do drone...")
@@ -237,14 +347,15 @@ class aproxima(py_trees.behaviour.Behaviour):
                 dt = current_time - self.last_control_time
             self.last_control_time = current_time
 
-            # Calcula erros horizontais
-            error_x = self.target_absolute_position['x'] - self.current_position['x'] 
-            error_y = self.target_absolute_position['y'] - self.current_position['y']
-            distance_horizontal = math.sqrt(error_x**2 + error_y**2)
-            
-            # Obtém estimativas do filtro de Kalman
+            # Obtém estimativas dos filtros de Kalman ANTES dos cálculos
+            self.position_filter.predict()
             position_estimate = self.position_filter.get_position_estimate()
             velocity_estimate = self.position_filter.get_velocity_estimate()
+            
+            # Calcula distância horizontal básica
+            basic_error_x = self.target_absolute_position['x'] - self.current_position['x'] 
+            basic_error_y = self.target_absolute_position['y'] - self.current_position['y']
+            distance_horizontal = math.sqrt(basic_error_x**2 + basic_error_y**2)
             
             # Calcula altitude atual para condições
             current_altitude = abs(self.current_position['z'])
@@ -255,14 +366,25 @@ class aproxima(py_trees.behaviour.Behaviour):
                     self.landing_phase = True
                     self.logger.warning("Alvo alcançado! Iniciando fase de pouso preciso!")
                 
-                # Durante o pouso: controle horizontal PI + descida suave para altitude zero
-                velocity_x = self.controller_x.compute(np.array([error_x]), dt)[0]
-                velocity_y = self.controller_y.compute(np.array([error_y]), dt)[0]
-                velocity_xy = np.array([velocity_x, velocity_y])
+                # Durante o pouso: usa predição completa para pouso suave
+                target_landing = {'x': self.target_absolute_position['x'], 
+                                'y': self.target_absolute_position['y'], 
+                                'z': 0.0}  # Alvo é o solo
                 
-                # Para pouso: erro Z é sempre a altitude atual (queremos chegar a zero)
-                error_z = 0.0 - self.current_position['z']  # Alvo é altitude zero
-                velocity_z = self.landing_velocity  # Velocidade constante de descida
+                error_x, error_y, error_z = self.calculate_predictive_error(
+                    target_landing, self.current_position, velocity_estimate
+                )
+                
+                # Controle PID completo para pouso
+                velocity_x = self.controller_x.compute(
+                    np.array([error_x]), dt, velocity_estimate
+                )[0]
+                velocity_y = self.controller_y.compute(
+                    np.array([error_y]), dt, velocity_estimate  
+                )[0]
+                
+                # Para Z: velocidade de descida constante controlada
+                velocity_z = self.landing_velocity  # Descida suave
                 
                 # Verifica se pousou
                 if current_altitude < 0.3:
@@ -270,13 +392,34 @@ class aproxima(py_trees.behaviour.Behaviour):
                     self.commander.publish_velocity_setpoint(0.0, 0.0, 0.0)
                     return py_trees.common.Status.SUCCESS
             else:
-                # Durante aproximação: controle PI completo para manter altitude de takeoff
-                error_z = self.takeoff_altitude - self.current_position['z']  # Mantém altitude de takeoff
-                velocity_x = self.controller_x.compute(np.array([error_x]), dt)[0]
-                velocity_y = self.controller_y.compute(np.array([error_y]), dt)[0]
-                velocity_z = self.controller_z.compute(np.array([error_z]), dt)[0]
+                # Durante aproximação: controle preditivo completo
+                target_approach = {'x': self.target_absolute_position['x'],
+                                 'y': self.target_absolute_position['y'],
+                                 'z': self.takeoff_altitude}
                 
-                velocity_xy = np.array([velocity_x, velocity_y])
+                # Calcula erros com predição do Kalman Filter
+                error_x, error_y, error_z = self.calculate_predictive_error(
+                    target_approach, self.current_position, velocity_estimate
+                )
+                
+                # Adiciona compensação de velocidade
+                comp_x, comp_y = self.calculate_velocity_compensation(
+                    velocity_estimate, distance_horizontal
+                )
+                
+                # Controle PID COMPLETO usando velocidade do Kalman Filter para termo derivativo
+                velocity_x = self.controller_x.compute(
+                    np.array([error_x + comp_x]), dt, velocity_estimate
+                )[0]
+                velocity_y = self.controller_y.compute(
+                    np.array([error_y + comp_y]), dt, velocity_estimate
+                )[0]
+                velocity_z = self.controller_z.compute(
+                    np.array([error_z]), dt, velocity_estimate if len(velocity_estimate) > 2 else [0.0, 0.0]
+                )[0]
+
+            # Cria array de velocidades horizontais
+            velocity_xy = np.array([velocity_x, velocity_y])
 
             # Aplica limitação de velocidade adaptativa
             adaptive_speed = self.calculate_adaptive_velocity(
@@ -310,16 +453,24 @@ class aproxima(py_trees.behaviour.Behaviour):
                 
             if self._log_counter % 20 == 0:  # A cada 20 iterações
                 phase_str = "POUSO" if self.landing_phase else "APROXIMAÇÃO"
+                
+                # Log da posição atual e predição
+                if self.enable_prediction and velocity_estimate is not None:
+                    predicted_pos = self.predict_future_position(
+                        self.current_position, velocity_estimate
+                    )
+                    self.logger.info(f"[{phase_str}] Predição: X={predicted_pos['x']:.2f}, Y={predicted_pos['y']:.2f}")
+                
                 self.logger.info(f"[{phase_str}] Pos atual: X={self.current_position['x']:.2f}, Y={self.current_position['y']:.2f}, Z={self.current_position['z']:.2f}")
                 self.logger.info(f"[{phase_str}] Alvo: X={self.target_absolute_position['x']:.2f}, Y={self.target_absolute_position['y']:.2f}")
                 self.logger.info(f"[{phase_str}] Erro: X={error_x:.2f}m, Y={error_y:.2f}m, Z={error_z:.2f}m, Dist={distance_horizontal:.2f}m")
                 self.logger.info(f"[{phase_str}] Vel estimada KF: vx={velocity_estimate[0]:.2f}, vy={velocity_estimate[1]:.2f} m/s")
-                self.logger.info(f"[{phase_str}] Vel cmd: Vx={velocity_x:.2f}, Vy={velocity_y:.2f}, Vz={velocity_z:.2f}")
+                self.logger.info(f"[{phase_str}] Vel cmd PID: Vx={velocity_x:.2f}, Vy={velocity_y:.2f}, Vz={velocity_z:.2f}")
 
             return py_trees.common.Status.RUNNING
 
         except Exception as e:
-            self.logger.error(f"Erro no controle: {e}")
+            self.logger.error(f"Erro no controle PID preditivo: {e}")
             self.commander.publish_velocity_setpoint(0.0, 0.0, 0.0)
             return py_trees.common.Status.FAILURE
     
